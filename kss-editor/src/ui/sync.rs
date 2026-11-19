@@ -73,8 +73,9 @@ impl EditorApp {
         let Some(tool) = self.ed(|e| e.tool) else {
             return;
         };
-        for (t, handle) in &self.h.tools {
-            handle.get().set_checked(*t == tool);
+        // One tool at a time: the strip's items are plain toggles.
+        for (index, t) in Tool::ALL.iter().enumerate() {
+            self.h.tools.get().set_checked(index, *t == tool);
         }
     }
 

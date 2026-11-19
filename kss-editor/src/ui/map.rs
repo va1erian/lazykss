@@ -15,7 +15,7 @@ use xui::widget::{Control, Placeable};
 
 use super::SharedEditor;
 use super::map_paint;
-use super::render::ChunkCache;
+use super::render::RoomImages;
 use super::view::ViewState;
 
 /// Pixels scrolled per wheel notch.
@@ -80,7 +80,7 @@ impl<M: 'static> MapView<M> {
         )?;
         let state = Rc::new(RefCell::new(ViewState::new()));
         state.borrow_mut().scroller.dpi = ui.dpi();
-        let cache = Rc::new(RefCell::new(ChunkCache::new()));
+        let cache = Rc::new(RefCell::new(RoomImages::new()));
 
         {
             let (state, theme) = (Rc::clone(&state), ui.theme_handle());

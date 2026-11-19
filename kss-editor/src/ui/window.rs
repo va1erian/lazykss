@@ -3,10 +3,9 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use xui::layout::Insets;
+use xui::Lucide;
 use xui::prelude::*;
 use xui::widget::FileDialog;
-use xui::{Dip, Lucide};
 
 use super::SharedEditor;
 use super::app::{DoorField, EditorApp, Handles, Layer, Msg, ObjField};
@@ -82,48 +81,44 @@ fn tool_icon(tool: Tool) -> Lucide {
         Tool::Select => Lucide::MousePointer2,
         Tool::Paint => Lucide::Pencil,
         Tool::Rect => Lucide::RectangleHorizontal,
-        // xui has no paint bucket; a filled disc reads as "flood".
-        Tool::Fill => Lucide::Disc,
+        Tool::Fill => Lucide::PaintBucket,
         Tool::AddObject => Lucide::Box,
     }
 }
 
 fn toolbar_row(h: &Handles) -> Layout<Msg> {
-    let tools: Vec<_> = h
-        .tools
-        .iter()
-        .map(|(tool, handle)| {
-            let tool = *tool;
-            toggle_button("")
-                .icon(tool_icon(tool))
-                .tooltip(tool.hint())
-                .checked(tool == Tool::Select)
-                .on_toggle(move |_| Msg::SetTool(tool))
-                .bind(handle)
-                .width(36)
-        })
-        .collect();
-    let layers: Vec<_> = h
-        .layers
-        .iter()
-        .map(|(layer, handle)| {
-            let (name, icon, tip, width) = match layer {
-                Layer::Background => ("BG", Lucide::Image, "Show the background layer", 72),
-                Layer::Foreground => ("FG", Lucide::Square, "Show the foreground (tile) layer", 72),
-                Layer::Grid => ("", Lucide::LayoutGrid, "Show the cell grid", 36),
-                Layer::Doors => ("", Lucide::LogOut, "Show door triggers", 36),
-                Layer::Objects => ("", Lucide::Eye, "Show object markers", 36),
-            };
-            let layer = *layer;
-            toggle_button(name)
-                .icon(icon)
-                .tooltip(tip)
-                .checked(layer != Layer::Grid)
-                .on_toggle(move |on| Msg::Layer(layer, on))
-                .bind(handle)
-                .width(width)
-        })
-        .collect();
+    // Checkable strips: the tools behave as a radio group (the app unchecks
+    // the others), the layers toggle on their own.
+    let mut tools = toolbar();
+    for tool in Tool::ALL {
+        tools = tools.toggle_item(tool_icon(tool), tool.hint());
+    }
+    let tools = tools
+        .checked(0, true)
+        .on_click(|index| Msg::SetTool(Tool::ALL[index.min(Tool::ALL.len() - 1)]))
+        .bind(&h.tools);
+
+    let mut layers = toolbar();
+    for (index, layer) in Layer::ALL.into_iter().enumerate() {
+        layers = match layer {
+            Layer::Background => {
+                layers.toggle_item_with_text(Lucide::Image, "Show the background layer", "BG")
+            }
+            Layer::Foreground => layers.toggle_item_with_text(
+                Lucide::Layers,
+                "Show the foreground (tile) layer",
+                "FG",
+            ),
+            Layer::Grid => layers.toggle_item(Lucide::Grid3x3, "Show the cell grid"),
+            Layer::Doors => layers.toggle_item(Lucide::DoorOpen, "Show door triggers"),
+            Layer::Objects => layers.toggle_item(Lucide::Eye, "Show object markers"),
+        };
+        layers = layers.checked(index, layer != Layer::Grid);
+    }
+    let layers = layers
+        .on_click(|index| Msg::Layer(Layer::ALL[index.min(Layer::ALL.len() - 1)]))
+        .bind(&h.layers);
+
     row().padding(6).gap(8).children((
         row().gap(2).children((
             icon_button(Lucide::FolderOpen, "Open a ROM (Ctrl+O)", Msg::OpenRom).width(36),
@@ -143,18 +138,12 @@ fn toolbar_row(h: &Handles) -> Layout<Msg> {
                 .bind(&h.redo)
                 .width(36),
         )),
-        row().gap(2).children(tools),
-        row().gap(2).children(layers),
-        // The row centres its children vertically: the label is shorter
-        // than the buttons beside it.
+        tools,
+        layers,
         row().gap(6).align(Align::Center).children((
-            icon_button(Lucide::Minus, "Zoom out (Ctrl+wheel)", Msg::ZoomOut).width(36),
-            // xui paints body text at the top of the label's line box, which
-            // reads high beside a button: push it to the bottom of the row.
-            column()
-                .padding(Insets::new(Dip(0.0), Dip(5.0), Dip(0.0), Dip(0.0)))
-                .child(label("2x").bind(&h.zoom_label)),
-            icon_button(Lucide::Plus, "Zoom in (Ctrl+wheel)", Msg::ZoomIn).width(36),
+            icon_button(Lucide::ZoomOut, "Zoom out (Ctrl+wheel)", Msg::ZoomOut).width(36),
+            label("2x").bind(&h.zoom_label),
+            icon_button(Lucide::ZoomIn, "Zoom in (Ctrl+wheel)", Msg::ZoomIn).width(36),
         )),
     ))
 }
@@ -293,20 +282,7 @@ fn room_tab(h: &Handles) -> Layout<Msg> {
 
 /// Builds the window and returns the app, with the first room open.
 pub fn create(ui: &mut Ui<Msg>, rom: Option<PathBuf>, editor: SharedEditor) -> Result<EditorApp> {
-    let h = Handles {
-        tools: Tool::ALL.iter().map(|t| (*t, Handle::new())).collect(),
-        layers: [
-            Layer::Background,
-            Layer::Foreground,
-            Layer::Grid,
-            Layer::Doors,
-            Layer::Objects,
-        ]
-        .into_iter()
-        .map(|l| (l, Handle::new()))
-        .collect(),
-        ..Handles::default()
-    };
+    let h = Handles::default();
 
     let map_editor = Rc::clone(&editor);
     ui.root(

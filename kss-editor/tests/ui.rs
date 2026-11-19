@@ -278,7 +278,7 @@ fn select_drag_nudge_and_delete_objects() {
 #[test]
 fn rectangle_flood_fill_and_add_object() {
     shoot("tools", Theme::light(), |s, editor, log| {
-        s.emit(Msg::Layer(kss_editor::ui::Layer::Grid, true));
+        s.emit(Msg::Layer(kss_editor::ui::Layer::Grid));
         s.emit(Msg::PickTile(0x0C));
         s.emit(Msg::SetTool(Tool::Rect));
         mouse_down(s, at(2 * 24 + 5, 24 + 5), MouseButton::Left);

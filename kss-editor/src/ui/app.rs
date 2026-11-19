@@ -44,7 +44,7 @@ pub enum Msg {
     Undo,
     Redo,
     SetTool(Tool),
-    Layer(Layer, bool),
+    Layer(Layer),
     ZoomIn,
     ZoomOut,
     // browser, map, picker
@@ -78,6 +78,17 @@ pub enum Layer {
     Objects,
 }
 
+impl Layer {
+    /// In toolbar order.
+    pub const ALL: [Layer; 5] = [
+        Layer::Background,
+        Layer::Foreground,
+        Layer::Grid,
+        Layer::Doors,
+        Layer::Objects,
+    ];
+}
+
 /// What the pointer is doing on the map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gesture {
@@ -94,8 +105,10 @@ pub struct Handles {
     pub picker: Handle<TilePicker<Msg>>,
     pub tree: Handle<TreeView<Msg>>,
     pub tabs: Handle<Tabs<Msg>>,
-    pub tools: Vec<(Tool, Handle<ToggleButton<Msg>>)>,
-    pub layers: Vec<(Layer, Handle<ToggleButton<Msg>>)>,
+    /// The tool strip: one checkable item per `Tool::ALL` entry.
+    pub tools: Handle<Toolbar<Msg>>,
+    /// The layer strip: one checkable item per `Layer::ALL` entry.
+    pub layers: Handle<Toolbar<Msg>>,
     pub undo: Handle<Button<Msg>>,
     pub redo: Handle<Button<Msg>>,
     pub zoom_label: Handle<Label<Msg>>,
@@ -615,14 +628,23 @@ impl App for EditorApp {
                 }
             }
             Msg::SetTool(tool) => self.set_tool(tool),
-            Msg::Layer(layer, on) => {
-                self.h.map.get().update_view(|v| match layer {
-                    Layer::Background => v.layers.background = on,
-                    Layer::Foreground => v.layers.foreground = on,
-                    Layer::Grid => v.grid = on,
-                    Layer::Doors => v.doors = on,
-                    Layer::Objects => v.objects = on,
+            Msg::Layer(layer) => {
+                // The view owns the state; the strip is set to match, whether
+                // the message came from a click on it or from elsewhere.
+                let mut on = false;
+                self.h.map.get().update_view(|v| {
+                    let flag = match layer {
+                        Layer::Background => &mut v.layers.background,
+                        Layer::Foreground => &mut v.layers.foreground,
+                        Layer::Grid => &mut v.grid,
+                        Layer::Doors => &mut v.doors,
+                        Layer::Objects => &mut v.objects,
+                    };
+                    *flag = !*flag;
+                    on = *flag;
                 });
+                let index = Layer::ALL.iter().position(|l| *l == layer).unwrap_or(0);
+                self.h.layers.get().set_checked(index, on);
             }
             Msg::ZoomIn => self.zoom_by(1),
             Msg::ZoomOut => self.zoom_by(-1),

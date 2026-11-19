@@ -4,13 +4,13 @@ use kss_core::names::object_name;
 use kss_core::{CELL, Object};
 use xui::Color;
 use xui::Dip;
-use xui::backend::{Canvas, Rgba, TextStyle};
+use xui::backend::{Canvas, ImageSampling, Rgba, TextStyle};
 use xui::geometry::{Point, Rect};
 use xui::theme::Theme;
 
 use crate::editor::{Editor, Tool};
 
-use super::render::{CHUNK, ChunkCache};
+use super::render::RoomImages;
 use super::view::ViewState;
 
 const TEXT: Dip = Dip(10.0);
@@ -20,7 +20,7 @@ pub fn paint(
     canvas: &mut dyn Canvas,
     editor: &Option<Editor>,
     view: &mut ViewState,
-    cache: &mut ChunkCache,
+    cache: &mut RoomImages,
     theme: &Theme,
 ) {
     let origin = canvas.bounds();
@@ -62,7 +62,7 @@ fn paint_room(
     canvas: &mut dyn Canvas,
     editor: &Editor,
     view: &mut ViewState,
-    cache: &mut ChunkCache,
+    cache: &mut RoomImages,
     theme: &Theme,
 ) {
     let room = editor.room();
@@ -70,39 +70,22 @@ fn paint_room(
 
     let key = cache_key(editor, view);
     if cache.key != key {
-        cache.set_source(key, editor.tileset().render_room(room, view.layers));
+        cache.set_room(key, &editor.tileset().render_room(room, view.layers));
     }
 
     let area = view.scroller.view();
     let (zoom, (ox, oy)) = (view.zoom, view.scroller.offset);
     canvas.push_clip(area);
 
-    // Room image, chunk by chunk.
-    let (image_w, image_h) = (room.width * CELL, room.height * CELL);
-    let chunk_px = CHUNK as i32 * zoom;
-    let first = (ox.max(0) / chunk_px) as usize;
-    let last = ((ox + area.width()).max(0) / chunk_px) as usize;
-    let first_y = (oy.max(0) / chunk_px) as usize;
-    let last_y = ((oy + area.height()).max(0) / chunk_px) as usize;
-    for cy in first_y..=last_y {
-        for cx in first..=last {
-            if cx * CHUNK >= image_w || cy * CHUNK >= image_h {
-                continue;
-            }
-            if let Some(chunk) = cache.chunk(cx, cy, zoom as usize) {
-                let left = cx as i32 * chunk_px - ox;
-                let top = cy as i32 * chunk_px - oy;
-                canvas.draw_image(
-                    chunk,
-                    Rect::new(
-                        left,
-                        top,
-                        left + chunk.width() as i32,
-                        top + chunk.height() as i32,
-                    ),
-                );
-            }
-        }
+    // The canvas scales the image with nearest-neighbour sampling and
+    // paints only what the clip shows.
+    if let Some(image) = cache.room() {
+        let (w, h) = (image.width() as i32 * zoom, image.height() as i32 * zoom);
+        canvas.draw_image_sampled(
+            image,
+            Rect::new(-ox, -oy, w - ox, h - oy),
+            ImageSampling::Nearest,
+        );
     }
 
     if view.grid {
@@ -199,7 +182,7 @@ fn object_colour(id: u8) -> Color {
 fn paint_object_body(
     canvas: &mut dyn Canvas,
     editor: &Editor,
-    cache: &mut ChunkCache,
+    cache: &mut RoomImages,
     object: &Object,
     centre: (i32, i32),
     zoom: i32,
@@ -210,16 +193,12 @@ fn paint_object_body(
         .sprites()
         .get(object.id, object.variant)
         .map(|s| (s.origin_x, s.origin_y));
-    let icon = cache.sprite(editor.sprites(), object.id, object.variant, zoom as usize);
+    let icon = cache.sprite(editor.sprites(), object.id, object.variant);
     if let (Some(icon), Some((ox, oy))) = (icon, origin) {
         let (left, top) = (cx - ox * zoom, cy - oy * zoom);
-        let rect = Rect::new(
-            left,
-            top,
-            left + icon.width() as i32,
-            top + icon.height() as i32,
-        );
-        canvas.draw_image(icon, rect);
+        let (w, h) = (icon.width() as i32 * zoom, icon.height() as i32 * zoom);
+        let rect = Rect::new(left, top, left + w, top + h);
+        canvas.draw_image_sampled(icon, rect, ImageSampling::Nearest);
         rect
     } else {
         let half = (8 * zoom).max(8);
@@ -239,7 +218,7 @@ fn paint_objects(
     canvas: &mut dyn Canvas,
     editor: &Editor,
     view: &ViewState,
-    cache: &mut ChunkCache,
+    cache: &mut RoomImages,
     theme: &Theme,
 ) {
     let area = view.scroller.view();
@@ -286,7 +265,7 @@ fn paint_tool_overlay(
     canvas: &mut dyn Canvas,
     editor: &Editor,
     view: &ViewState,
-    cache: &mut ChunkCache,
+    cache: &mut RoomImages,
     theme: &Theme,
 ) {
     let accent = theme.accent;
