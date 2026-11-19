@@ -1,19 +1,44 @@
 # lazykss
 
-## Project Introduction
-`lazykss` is a Rust-based tool and library for parsing, viewing, and potentially editing level data from the SNES game *Kirby Super Star* (specifically the US LoROM SA-1 release, `Kirby Super Star (USA).sfc`).
-The application is built using the `eframe` / `egui` GUI framework and features:
-- A flat ROM address mapper (`snes_to_offset`).
-- A custom LZ-family decompressor for HAL Laboratory compression (`src/compression.rs`).
-- Level and room parsing, including room headers, graphics header themes, door records, entrance coordinates, and sprite tables (`src/level.rs`).
-- A graphical user interface to explore rooms, scroll through levels, view room headers, render tile graphics and palettes, and display tilemaps/sprites/entrances (`src/main.rs`).
+A level editor for the SNES game *Kirby Super Star* (US release, SA-1). The
+first version covers the four stages of Spring Breeze.
 
-## Technical Documentation Reference
-For detailed information about the SNES ROM structure, SA-1 chip mapping, master pointer tables, room data headers, and the HAL decompression format, please refer to the main technical documentation file:
-- [KSS_Level_Editor_Documentation.md](KSS_Level_Editor_Documentation.md)
+## Layout
 
-## Instructions for AI Agents & Bots
-To maintain code quality and ensure stability, any AI bot or agent working on this repository must adhere to the following rules:
-1. **Always Verify Compilation**: Before completing any task or submitting changes, run `cargo check` to verify that the project compiles cleanly.
-2. **No Warnings Allowed**: Ensure that `cargo check` produces **zero warnings** and zero errors. If any new unused code, dead code, or warnings are introduced, resolve them before finishing the task (e.g., using `#[allow(dead_code)]` or fixing the implementation).
-3. **Verify Tests**: Run `cargo test` to ensure that all existing and new unit tests pass successfully.
+- `kss-core/` — no UI dependencies. ROM access (`rom.rs`), the HAL codec
+  (`compression.rs`), rooms and the save pipeline (`room.rs`), tileset
+  rendering (`gfx.rs`), object sprites (`sprites.rs` and the generated
+  `sprite_table.rs`), names (`names.rs`).
+  Examples: `render_room` (rooms to PPM), `patch_room` (scripted edits).
+- `kss-editor/` — the GUI, on [xui](https://github.com/va1erian/xui).
+  `editor.rs` and `history.rs` hold the editing logic and undo, with no UI
+  types; `ui/` holds the window, the custom-painted map and tile picker.
+- `KSS_Level_Editor_Documentation.md` — the data formats, with what was
+  verified and how. Read it before touching `kss-core`.
+
+## Running
+
+```text
+cargo run -p kss-editor [rom.sfc]
+```
+
+Without an argument the ROM is found through `KSS_ROM`, or as
+`Kirby Super Star (USA).sfc` in the current directory or any parent. The ROM
+is not part of the repository. Save never writes over the file that was
+opened, nor over a file from an earlier session: it writes
+`<name> (edited).sfc` next to the ROM (`(edited 2)`, ... when that exists)
+unless Save As picks another path.
+
+## Rules for agents
+
+1. `cargo check --all-targets` and `cargo test` must finish with zero
+   warnings and zero failures. Tests that need the ROM pass silently without
+   it, so run them where the ROM can be found.
+2. Check UI changes headlessly: `XUI_LAYOUT_REPORT=1 XUI_SNAPSHOT=target/shots
+   cargo run -p kss-editor` writes light and dark PNGs and must report
+   `XUI_LAYOUT_WARNINGS:0`. Look at the PNGs.
+3. `kss-core/src/sprite_table.rs` was generated from emulator captures
+   (documentation §6) by a harness that is not in this repository. Extend it
+   the same way rather than by guessing addresses.
+4. A change to the save pipeline is not done until a saved ROM has been
+   booted in an SA-1-accurate emulator.

@@ -1,1 +1,5 @@
 /target
+*.sfc
+*.smc
+*.bak
+target-shots/

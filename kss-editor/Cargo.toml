@@ -1,0 +1,25 @@
+[package]
+name = "kss-editor"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Level editor GUI for Kirby Super Star (USA), built on xui"
+
+[lib]
+name = "kss_editor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kss-editor"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+kss-core = { path = "../kss-core" }
+xui = { git = "https://github.com/va1erian/xui" }
+
+# Windows draws with Direct2D; other platforms use xui's software backend.
+[target.'cfg(windows)'.dependencies]
+xui-d2d = { git = "https://github.com/va1erian/xui" }

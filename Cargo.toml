@@ -1,10 +1,10 @@
-[package]
-name = "lazykss"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = ["kss-core", "kss-editor"]
 
-[dependencies]
-egui = "0.34.1"
-eframe = "0.34.1"
-byteorder = "1.5"
-image = "0.25"
+[profile.dev]
+opt-level = 1
+
+[workspace.lints.clippy]
+# `chunks_exact(2)` over byte pairs reads better here than `as_chunks`.
+chunks_exact_to_as_chunks = "allow"
