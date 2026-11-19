@@ -31,7 +31,10 @@ pub fn group_index(node: Node) -> Option<usize> {
 fn room_label(editor: &Editor, room: usize) -> String {
     let dirty = if editor.is_dirty(room) { "*" } else { "" };
     match editor.loaded(room) {
-        Some(lr) => format!("Room {room} \u{2014} {}x{}{dirty}", lr.room.width, lr.room.height),
+        Some(lr) => format!(
+            "Room {room} \u{2014} {}x{}{dirty}",
+            lr.room.width, lr.room.height
+        ),
         None => format!("Room {room}"),
     }
 }
@@ -45,7 +48,11 @@ pub fn rows(editor: &Editor, expanded: &[bool; GROUPS]) -> (Vec<TreeRow>, Vec<No
         let info = &editor.tables().levels[level];
         let any_dirty = info.rooms.clone().any(|r| editor.is_dirty(r));
         let label = format!("{}{}", info.name, if any_dirty { " *" } else { "" });
-        rows.push(TreeRow::new(label, 0).expandable(true).expanded(expanded[level]));
+        rows.push(
+            TreeRow::new(label, 0)
+                .expandable(true)
+                .expanded(expanded[level]),
+        );
         nodes.push(Node::Level(level));
         for room in info.rooms.clone() {
             rows.push(TreeRow::new(room_label(editor, room), 1));
@@ -55,8 +62,15 @@ pub fn rows(editor: &Editor, expanded: &[bool; GROUPS]) -> (Vec<TreeRow>, Vec<No
     let others = editor.spring_breeze_rooms().end..editor.room_count();
     if !others.is_empty() {
         let any_dirty = others.clone().any(|r| editor.is_dirty(r));
-        let label = format!("Other rooms (unverified){}", if any_dirty { " *" } else { "" });
-        rows.push(TreeRow::new(label, 0).expandable(true).expanded(expanded[SPRING_BREEZE_LEVELS.end]));
+        let label = format!(
+            "Other rooms (unverified){}",
+            if any_dirty { " *" } else { "" }
+        );
+        rows.push(
+            TreeRow::new(label, 0)
+                .expandable(true)
+                .expanded(expanded[SPRING_BREEZE_LEVELS.end]),
+        );
         nodes.push(Node::Other);
         for room in others {
             rows.push(TreeRow::new(room_label(editor, room), 1));
@@ -84,6 +98,9 @@ mod tests {
         let other = nodes.iter().position(|n| *n == Node::Other).unwrap();
         assert_eq!(rows[other].label, "Other rooms (unverified)");
         assert!(!rows[other].expanded);
-        assert_eq!(nodes.iter().filter(|n| matches!(n, Node::Room(_))).count(), editor.room_count());
+        assert_eq!(
+            nodes.iter().filter(|n| matches!(n, Node::Room(_))).count(),
+            editor.room_count()
+        );
     }
 }

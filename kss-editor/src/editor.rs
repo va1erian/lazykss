@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use kss_core::room::MAX_CELLS;
 use kss_core::room::SPRING_BREEZE_LEVELS;
 use kss_core::{CELL, Door, Object, ObjectSprites, Rom, Room, SaveReport, Tables, Tileset};
 
@@ -23,7 +24,13 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 5] = [Tool::Select, Tool::Paint, Tool::Rect, Tool::Fill, Tool::AddObject];
+    pub const ALL: [Tool; 5] = [
+        Tool::Select,
+        Tool::Paint,
+        Tool::Rect,
+        Tool::Fill,
+        Tool::AddObject,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -50,8 +57,9 @@ impl Tool {
 pub struct LoadedRoom {
     pub room: Room,
     pub tileset: Tileset,
-    /// The tiles as loaded or last saved: what the block list was built for.
-    saved_tiles: Vec<u16>,
+    /// The map as loaded or last written to a file: what the room's list of
+    /// breakable cells was built for, and the records it had.
+    saved: MapSnapshot,
     /// Bumped whenever the room image changes, to invalidate renders.
     pub revision: u64,
     pub undo: Vec<Entry>,
@@ -70,7 +78,11 @@ pub struct SaveSummary {
 impl SaveSummary {
     /// A one-line description for the status bar.
     pub fn describe(&self) -> String {
-        let name = self.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = self
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         if self.rooms.is_empty() {
             return format!("Saved {name} (no room changes)");
         }
@@ -79,7 +91,10 @@ impl SaveSummary {
             .iter()
             .map(|(room, r)| {
                 let moved = if r.moved { ", moved" } else { "" };
-                format!("room {room}: {} bytes (was {}{moved})", r.len, r.previous_len)
+                format!(
+                    "room {room}: {} bytes (was {}{moved})",
+                    r.len, r.previous_len
+                )
             })
             .collect();
         format!("Saved {name}: {}", rooms.join("; "))
@@ -109,7 +124,10 @@ pub struct Editor {
 /// paints without gaps.
 pub fn line_cells(a: (i32, i32), b: (i32, i32)) -> Vec<(i32, i32)> {
     let (dx, dy) = ((b.0 - a.0).abs(), -(b.1 - a.1).abs());
-    let (sx, sy) = (if a.0 < b.0 { 1 } else { -1 }, if a.1 < b.1 { 1 } else { -1 });
+    let (sx, sy) = (
+        if a.0 < b.0 { 1 } else { -1 },
+        if a.1 < b.1 { 1 } else { -1 },
+    );
     let (mut x, mut y, mut err) = (a.0, a.1, dx + dy);
     let mut cells = vec![(x, y)];
     while (x, y) != b {
@@ -127,16 +145,28 @@ pub fn line_cells(a: (i32, i32), b: (i32, i32)) -> Vec<(i32, i32)> {
     cells
 }
 
-/// `<name> (edited).sfc` next to `source`, never `source` itself.
+/// `<name> (edited).sfc` next to `source`, or `(edited 2)`, `(edited 3)`...
+/// when that exists: a plain Save in a new session never replaces a file
+/// written by an earlier one.
 pub fn default_edited_path(source: &Path) -> PathBuf {
-    let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "rom".into());
-    let ext = source.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_else(|| "sfc".into());
+    let stem = source
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "rom".into());
+    let ext = source
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "sfc".into());
     let dir = source.parent().map(Path::to_path_buf).unwrap_or_default();
     let mut n = 1;
     loop {
-        let tag = if n == 1 { "edited".to_string() } else { format!("edited {n}") };
+        let tag = if n == 1 {
+            "edited".to_string()
+        } else {
+            format!("edited {n}")
+        };
         let candidate = dir.join(format!("{stem} ({tag}).{ext}"));
-        if candidate != source {
+        if !candidate.exists() {
             return candidate;
         }
         n += 1;
@@ -203,7 +233,9 @@ impl Editor {
     /// Where plain Save writes: the path of the last save, else the default
     /// `<name> (edited).sfc` next to the source.
     pub fn save_target(&self) -> PathBuf {
-        self.save_path.clone().unwrap_or_else(|| default_edited_path(&self.source))
+        self.save_path
+            .clone()
+            .unwrap_or_else(|| default_edited_path(&self.source))
     }
 
     // ---- rooms ----
@@ -216,7 +248,15 @@ impl Editor {
         let tileset = Tileset::for_room(&self.rom, &self.tables, &room);
         self.rooms.insert(
             index,
-            LoadedRoom { saved_tiles: room.tiles.clone(), room, tileset, revision: 0, undo: Vec::new(), redo: Vec::new(), dirty: false },
+            LoadedRoom {
+                saved: MapSnapshot::of(&room),
+                room,
+                tileset,
+                revision: 0,
+                undo: Vec::new(),
+                redo: Vec::new(),
+                dirty: false,
+            },
         );
         Ok(())
     }
@@ -242,11 +282,15 @@ impl Editor {
     }
 
     fn cur(&self) -> &LoadedRoom {
-        self.rooms.get(&self.current).expect("the current room is loaded")
+        self.rooms
+            .get(&self.current)
+            .expect("the current room is loaded")
     }
 
     fn cur_mut(&mut self) -> &mut LoadedRoom {
-        self.rooms.get_mut(&self.current).expect("the current room is loaded")
+        self.rooms
+            .get_mut(&self.current)
+            .expect("the current room is loaded")
     }
 
     pub fn room(&self) -> &Room {
@@ -271,7 +315,11 @@ impl Editor {
     }
 
     pub fn dirty_rooms(&self) -> Vec<usize> {
-        self.rooms.iter().filter(|(_, r)| r.dirty).map(|(i, _)| *i).collect()
+        self.rooms
+            .iter()
+            .filter(|(_, r)| r.dirty)
+            .map(|(i, _)| *i)
+            .collect()
     }
 
     pub fn any_dirty(&self) -> bool {
@@ -297,11 +345,11 @@ impl Editor {
     }
 
     pub fn end_group(&mut self) {
-        if let Some(group) = self.group.take() {
-            if !group.is_empty() {
-                let lr = self.cur_mut();
-                lr.undo.push(group);
-            }
+        if let Some(group) = self.group.take()
+            && !group.is_empty()
+        {
+            let lr = self.cur_mut();
+            lr.undo.push(group);
         }
     }
 
@@ -333,15 +381,22 @@ impl Editor {
     pub fn undo(&mut self) -> bool {
         self.end_group();
         let lr = self.cur_mut();
-        let Some(entry) = lr.undo.pop() else { return false };
+        let Some(entry) = lr.undo.pop() else {
+            return false;
+        };
         for change in entry.iter().rev() {
             change.revert(&mut lr.room);
             if change.alters_image() {
                 lr.revision += 1;
             }
         }
+        let reordered = entry.iter().any(Change::reorders_objects);
         lr.redo.push(entry);
         lr.dirty = true;
+        if reordered {
+            // The selected index may now name another object.
+            self.selected_object = None;
+        }
         self.fix_selection();
         true
     }
@@ -349,15 +404,21 @@ impl Editor {
     pub fn redo(&mut self) -> bool {
         self.end_group();
         let lr = self.cur_mut();
-        let Some(entry) = lr.redo.pop() else { return false };
+        let Some(entry) = lr.redo.pop() else {
+            return false;
+        };
         for change in &entry {
             change.apply(&mut lr.room);
             if change.alters_image() {
                 lr.revision += 1;
             }
         }
+        let reordered = entry.iter().any(Change::reorders_objects);
         lr.undo.push(entry);
         lr.dirty = true;
+        if reordered {
+            self.selected_object = None;
+        }
         self.fix_selection();
         true
     }
@@ -381,17 +442,24 @@ impl Editor {
     }
 
     pub fn tile_at(&self, x: i32, y: i32) -> Option<u16> {
-        self.in_bounds(x, y).then(|| self.room().tile(x as usize, y as usize))
+        self.in_bounds(x, y)
+            .then(|| self.room().tile(x as usize, y as usize))
     }
 
     /// Sets one cell to `id`. Returns whether it changed.
     pub fn set_tile(&mut self, x: i32, y: i32, id: u16) -> bool {
-        let Some(old) = self.tile_at(x, y) else { return false };
+        let Some(old) = self.tile_at(x, y) else {
+            return false;
+        };
         if old == id {
             return false;
         }
         let index = y as usize * self.room().width + x as usize;
-        self.perform(Change::Tiles(vec![TileChange { index, old, new: id }]));
+        self.perform(Change::Tiles(vec![TileChange {
+            index,
+            old,
+            new: id,
+        }]));
         true
     }
 
@@ -423,7 +491,11 @@ impl Editor {
                 let index = (y * width + x) as usize;
                 let old = self.room().tiles[index];
                 if old != self.tile {
-                    cells.push(TileChange { index, old, new: self.tile });
+                    cells.push(TileChange {
+                        index,
+                        old,
+                        new: self.tile,
+                    });
                 }
             }
         }
@@ -437,7 +509,9 @@ impl Editor {
     /// Replaces the 4-connected region of equal tiles around a cell with the
     /// current tile. Returns how many cells changed.
     pub fn flood_fill(&mut self, x: i32, y: i32) -> usize {
-        let Some(target) = self.tile_at(x, y) else { return 0 };
+        let Some(target) = self.tile_at(x, y) else {
+            return 0;
+        };
         if target == self.tile {
             return 0;
         }
@@ -451,7 +525,11 @@ impl Editor {
                 continue;
             }
             seen[index] = true;
-            cells.push(TileChange { index, old: target, new: self.tile });
+            cells.push(TileChange {
+                index,
+                old: target,
+                new: self.tile,
+            });
             if cx > 0 {
                 stack.push((cx - 1, cy));
             }
@@ -506,7 +584,12 @@ impl Editor {
     /// Places an object of the current `new_object` kind and selects it.
     pub fn add_object(&mut self, x: i32, y: i32) -> usize {
         let (px, py) = self.clamp_position(x, y);
-        let object = Object { id: self.new_object.0, variant: self.new_object.1, x: px, y: py };
+        let object = Object {
+            id: self.new_object.0,
+            variant: self.new_object.1,
+            x: px,
+            y: py,
+        };
         let index = self.room().objects.len();
         self.perform(Change::AddObject { index, object });
         self.selected_object = Some(index);
@@ -514,7 +597,9 @@ impl Editor {
     }
 
     pub fn remove_object(&mut self, index: usize) -> bool {
-        let Some(object) = self.room().objects.get(index).copied() else { return false };
+        let Some(object) = self.room().objects.get(index).copied() else {
+            return false;
+        };
         self.perform(Change::RemoveObject { index, object });
         self.selected_object = None;
         true
@@ -522,7 +607,9 @@ impl Editor {
 
     /// Replaces object `index`. A no-op when nothing differs.
     pub fn set_object(&mut self, index: usize, new: Object) -> bool {
-        let Some(old) = self.room().objects.get(index).copied() else { return false };
+        let Some(old) = self.room().objects.get(index).copied() else {
+            return false;
+        };
         let (x, y) = self.clamp_position(new.x as i32, new.y as i32);
         let new = Object { x, y, ..new };
         if old == new {
@@ -534,13 +621,17 @@ impl Editor {
 
     /// Moves object `index` to a room-pixel position (clamped to the room).
     pub fn move_object(&mut self, index: usize, x: i32, y: i32) -> bool {
-        let Some(old) = self.room().objects.get(index).copied() else { return false };
+        let Some(old) = self.room().objects.get(index).copied() else {
+            return false;
+        };
         let (x, y) = self.clamp_position(x, y);
         self.set_object(index, Object { x, y, ..old })
     }
 
     pub fn nudge_object(&mut self, index: usize, dx: i32, dy: i32) -> bool {
-        let Some(old) = self.room().objects.get(index).copied() else { return false };
+        let Some(old) = self.room().objects.get(index).copied() else {
+            return false;
+        };
         self.move_object(index, old.x as i32 + dx, old.y as i32 + dy)
     }
 
@@ -548,7 +639,9 @@ impl Editor {
 
     pub fn set_door(&mut self, index: usize, new: Door) -> bool {
         let doors = self.room().doors();
-        let Some(old) = doors.get(index).copied() else { return false };
+        let Some(old) = doors.get(index).copied() else {
+            return false;
+        };
         if old == new {
             return false;
         }
@@ -568,14 +661,17 @@ impl Editor {
     /// Resizes the current room, keeping its top-left cells.
     pub fn resize(&mut self, width: usize, height: usize) -> bool {
         let (w, h) = (self.room().width, self.room().height);
-        if width == 0 || height == 0 || (width, height) == (w, h) {
+        if width == 0 || height == 0 || (width, height) == (w, h) || width * height > MAX_CELLS {
             return false;
         }
         let old = MapSnapshot::of(self.room());
         let mut probe = self.room().clone();
         probe.resize(width, height);
         let new = MapSnapshot::of(&probe);
-        self.perform(Change::Resize { old: Box::new(old), new: Box::new(new) });
+        self.perform(Change::Resize {
+            old: Box::new(old),
+            new: Box::new(new),
+        });
         // Objects outside the new bounds stay; the game ignores them but the
         // user can see and delete them.
         true
@@ -599,20 +695,53 @@ impl Editor {
     fn write_to(&mut self, path: PathBuf) -> Result<SaveSummary, String> {
         self.end_group();
         let mut written = Vec::new();
-        let dirty = self.dirty_rooms();
-        for index in dirty {
+        for index in self.dirty_rooms() {
             let lr = self.rooms.get_mut(&index).expect("dirty rooms are loaded");
             // Star and bomb blocks only break when the room lists their cell.
-            let LoadedRoom { room, tileset, saved_tiles, .. } = lr;
-            room.sync_blocks(|tile| tileset.is_breakable(tile), saved_tiles);
-            let report = lr.room.save(&mut self.rom, &mut self.tables).map_err(|e| format!("room {index}: {e}"))?;
-            lr.saved_tiles = lr.room.tiles.clone();
-            lr.dirty = false;
+            let LoadedRoom {
+                room,
+                tileset,
+                saved,
+                ..
+            } = lr;
+            room.sync_blocks(
+                |tile| tileset.is_breakable(tile),
+                |x, y| saved.tile(x, y),
+                &saved.blocks,
+            );
+            let report = room
+                .save(&mut self.rom, &mut self.tables)
+                .map_err(|e| format!("room {index}: {e}"))?;
             written.push((index, report));
         }
-        self.rom.save(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        self.rom
+            .save(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        // Only now is the work safe: a failure above leaves every room
+        // marked as changed, and the next save writes them all again.
+        for &(index, _) in &written {
+            let lr = self
+                .rooms
+                .get_mut(&index)
+                .expect("written rooms are loaded");
+            // Records dropped by an earlier save stay remembered, so undoing
+            // back to a block restores what it breaks into.
+            let mut blocks = lr.room.blocks();
+            let forgotten =
+                |old: &&kss_core::Block| !blocks.iter().any(|b| (b.x, b.y) == (old.x, old.y));
+            let kept: Vec<_> = lr.saved.blocks.iter().filter(forgotten).copied().collect();
+            blocks.extend(kept);
+            lr.saved = MapSnapshot {
+                blocks,
+                ..MapSnapshot::of(&lr.room)
+            };
+            lr.dirty = false;
+        }
         self.save_path = Some(path.clone());
-        Ok(SaveSummary { path, rooms: written })
+        Ok(SaveSummary {
+            path,
+            rooms: written,
+        })
     }
 }
 
@@ -626,7 +755,8 @@ mod tests {
     }
 
     fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("kss-editor-test-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("kss-editor-test-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -646,9 +776,20 @@ mod tests {
     #[test]
     fn default_path_is_next_to_source_and_differs() {
         let p = default_edited_path(Path::new("C:/roms/Kirby Super Star (USA).sfc"));
-        assert_eq!(p, PathBuf::from("C:/roms/Kirby Super Star (USA) (edited).sfc"));
-        let q = default_edited_path(Path::new("C:/roms/Kirby Super Star (USA) (edited).sfc"));
-        assert_ne!(q, PathBuf::from("C:/roms/Kirby Super Star (USA) (edited).sfc"));
+        assert_eq!(
+            p,
+            PathBuf::from("C:/roms/Kirby Super Star (USA) (edited).sfc")
+        );
+        // An existing file is never the default target.
+        let dir = temp("default-path");
+        let source = dir.join("game.sfc");
+        assert_eq!(default_edited_path(&source), dir.join("game (edited).sfc"));
+        std::fs::write(dir.join("game (edited).sfc"), b"earlier session").unwrap();
+        assert_eq!(
+            default_edited_path(&source),
+            dir.join("game (edited 2).sfc")
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -712,7 +853,15 @@ mod tests {
         let before = e.room().objects.clone();
         e.new_object = (0x02, 3);
         let i = e.add_object(100, 50);
-        assert_eq!(e.room().objects[i], Object { id: 2, variant: 3, x: 100, y: 50 });
+        assert_eq!(
+            e.room().objects[i],
+            Object {
+                id: 2,
+                variant: 3,
+                x: 100,
+                y: 50
+            }
+        );
         assert_eq!(e.selected_object, Some(i));
         assert_eq!(e.object_at(104, 47, 8), Some(i));
         e.begin_group();
@@ -733,7 +882,10 @@ mod tests {
         assert_eq!(e.room().objects, before);
         // Positions clamp to the room.
         let i = e.add_object(-5, 100_000);
-        assert_eq!((e.room().objects[i].x, e.room().objects[i].y), (0, (8 * CELL - 1) as u16));
+        assert_eq!(
+            (e.room().objects[i].x, e.room().objects[i].y),
+            (0, (8 * CELL - 1) as u16)
+        );
     }
 
     #[test]
@@ -741,7 +893,10 @@ mod tests {
         let Some(mut e) = editor() else { return };
         let doors = e.room().doors();
         if let Some(&door) = doors.first() {
-            let moved = Door { dest_x: door.dest_x.wrapping_add(8), ..door };
+            let moved = Door {
+                dest_x: door.dest_x.wrapping_add(8),
+                ..door
+            };
             assert!(e.set_door(0, moved));
             assert_eq!(e.room().doors()[0], moved);
             e.undo();
@@ -759,7 +914,10 @@ mod tests {
         assert_eq!(e.room().tiles.len(), 90 * 9);
         assert!(e.revision() > rev);
         e.undo();
-        assert_eq!((e.room().width, e.room().height, e.room().tiles.clone()), before);
+        assert_eq!(
+            (e.room().width, e.room().height, e.room().tiles.clone()),
+            before
+        );
     }
 
     #[test]
@@ -784,11 +942,18 @@ mod tests {
 
         // Plain Save defaults to a new file next to the source.
         let summary = e.save().unwrap();
-        assert_eq!(summary.path, dir.join("Kirby Super Star (USA) (edited).sfc"));
+        assert_eq!(
+            summary.path,
+            dir.join("Kirby Super Star (USA) (edited).sfc")
+        );
         assert_ne!(summary.path, source);
         assert_eq!(summary.rooms.len(), 1);
         assert!(!e.any_dirty());
-        assert_eq!(std::fs::read(&source).unwrap(), original, "the source ROM must be untouched");
+        assert_eq!(
+            std::fs::read(&source).unwrap(),
+            original,
+            "the source ROM must be untouched"
+        );
 
         let reloaded = Editor::open(&summary.path).unwrap();
         assert_eq!(reloaded.room().tile(3, 2), 0x0C);
@@ -835,5 +1000,71 @@ mod tests {
         e.select_room(1).unwrap();
         assert!(e.can_undo());
         assert_eq!(e.dirty_rooms(), vec![1]);
+    }
+
+    #[test]
+    fn a_failed_write_keeps_the_rooms_dirty() {
+        let Some(mut e) = editor() else { return };
+        e.tile = 0x00C;
+        e.paint(40, 1);
+        let missing = temp("failed-write").join("no-such-folder").join("out.sfc");
+        assert!(e.save_as(&missing).is_err());
+        assert!(e.any_dirty(), "the edit is not on disk");
+        // The next save writes it.
+        let good = temp("failed-write").join("out.sfc");
+        let summary = e.save_as(&good).unwrap();
+        assert_eq!(summary.rooms.len(), 1);
+        assert!(!e.any_dirty());
+        let reopened = Editor::open(&good).unwrap();
+        assert_eq!(reopened.tile_at(40, 1), Some(0x00C));
+        let _ = std::fs::remove_dir_all(temp("failed-write"));
+    }
+
+    #[test]
+    fn resizing_keeps_breakable_blocks_on_their_cells() {
+        let Some(mut e) = editor() else { return };
+        // Room 3: star blocks at (19..24, 4), their caps in the row above.
+        e.select_room(3).unwrap();
+        let blocks = e.room().blocks();
+        assert_eq!(blocks.len(), 8);
+        assert!(e.resize(40, 8));
+        assert_eq!(e.room().blocks(), blocks);
+        let out = temp("resize-blocks").join("out.sfc");
+        e.save_as(&out).unwrap();
+        let mut reopened = Editor::open(&out).unwrap();
+        reopened.select_room(3).unwrap();
+        assert_eq!((reopened.room().width, reopened.room().height), (40, 8));
+        assert_eq!(reopened.room().blocks(), blocks);
+        // Undo restores the size and the list.
+        assert!(e.undo());
+        assert_eq!((e.room().width, e.room().blocks()), (37, blocks));
+        // A room that could not be stored is refused.
+        assert!(!e.resize(400, 100));
+        let _ = std::fs::remove_dir_all(temp("resize-blocks"));
+    }
+
+    #[test]
+    fn a_block_restored_by_undo_after_a_save_keeps_its_record() {
+        let Some(mut e) = editor() else { return };
+        e.select_room(3).unwrap();
+        let blocks = e.room().blocks();
+        let dir = temp("undo-block");
+        e.tile = 0;
+        e.paint(19, 4);
+        e.save_as(&dir.join("a.sfc")).unwrap();
+        assert_eq!(e.room().blocks().len(), 7);
+        assert!(e.undo());
+        e.save_as(&dir.join("b.sfc")).unwrap();
+        assert_eq!(e.room().blocks(), blocks);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn undoing_a_delete_drops_the_selection() {
+        let Some(mut e) = editor() else { return };
+        assert!(e.remove_object(0));
+        e.selected_object = Some(0);
+        assert!(e.undo());
+        assert_eq!(e.selected_object, None);
     }
 }

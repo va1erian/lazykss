@@ -131,7 +131,12 @@ pub struct EditorApp {
 }
 
 impl EditorApp {
-    pub(super) fn new(editor: SharedEditor, h: Handles, open_dialog: FileDialog<Msg>, save_dialog: FileDialog<Msg>) -> Self {
+    pub(super) fn new(
+        editor: SharedEditor,
+        h: Handles,
+        open_dialog: FileDialog<Msg>,
+        save_dialog: FileDialog<Msg>,
+    ) -> Self {
         Self {
             editor,
             h,
@@ -205,7 +210,10 @@ impl EditorApp {
             return;
         }
         self.discard_armed = false;
-        if let Some(dir) = self.ed(|e| e.source_path().parent().map(|p| p.to_path_buf())).flatten() {
+        if let Some(dir) = self
+            .ed(|e| e.source_path().parent().map(|p| p.to_path_buf()))
+            .flatten()
+        {
             self.open_dialog.set_initial_dir(dir);
         }
         self.open_dialog.open();
@@ -241,7 +249,10 @@ impl EditorApp {
     }
 
     fn zoom_by(&mut self, delta: i32) {
-        self.h.map.get().update_view(|v| v.set_zoom_centered(v.zoom + delta));
+        self.h
+            .map
+            .get()
+            .update_view(|v| v.set_zoom_centered(v.zoom + delta));
         self.refresh_status();
     }
 
@@ -258,7 +269,12 @@ impl EditorApp {
                 self.refresh_status();
             }
             MapEvent::ViewChanged => self.refresh_status(),
-            MapEvent::Press { button, cell, pos, mods } => self.press(button, cell, pos, mods),
+            MapEvent::Press {
+                button,
+                cell,
+                pos,
+                mods,
+            } => self.press(button, cell, pos, mods),
             MapEvent::Drag { cell, pos, .. } => {
                 self.cursor = Some((cell, pos));
                 self.drag(cell, pos);
@@ -288,7 +304,10 @@ impl EditorApp {
         let tile_tool = matches!(tool, Tool::Paint | Tool::Rect | Tool::Fill);
         // Right-click, or Alt+click with the paint tool, picks the tile.
         if (button == MouseButton::Right && tile_tool) || (mods.alt && tool == Tool::Paint) {
-            if self.ed_mut(|e| e.pick_tile(cell.0, cell.1)).unwrap_or(false) {
+            if self
+                .ed_mut(|e| e.pick_tile(cell.0, cell.1))
+                .unwrap_or(false)
+            {
                 self.refresh_tile();
             }
             return;
@@ -309,7 +328,11 @@ impl EditorApp {
                             e.room().objects[index]
                         });
                         if let Some(o) = o {
-                            self.gesture = Gesture::Move { index, dx: o.x as i32 - pos.0, dy: o.y as i32 - pos.1 };
+                            self.gesture = Gesture::Move {
+                                index,
+                                dx: o.x as i32 - pos.0,
+                                dy: o.y as i32 - pos.1,
+                            };
                         }
                     }
                     None => {
@@ -333,7 +356,10 @@ impl EditorApp {
             }
             Tool::Rect => {
                 self.gesture = Gesture::Rect { start: cell };
-                self.h.map.get().update_view(|v| v.rect_drag = Some((cell, cell)));
+                self.h
+                    .map
+                    .get()
+                    .update_view(|v| v.rect_drag = Some((cell, cell)));
             }
             Tool::Fill => {
                 let n = self.ed_mut(|e| e.flood_fill(cell.0, cell.1)).unwrap_or(0);
@@ -364,7 +390,10 @@ impl EditorApp {
                 }
             }
             Gesture::Rect { start } => {
-                self.h.map.get().update_view(|v| v.rect_drag = Some((start, cell)));
+                self.h
+                    .map
+                    .get()
+                    .update_view(|v| v.rect_drag = Some((start, cell)));
             }
             Gesture::Move { index, dx, dy } => {
                 self.ed_mut(|e| e.move_object(index, pos.0 + dx, pos.1 + dy));
@@ -416,13 +445,17 @@ impl EditorApp {
                 self.refresh_objects();
             }
             MapKey::DeleteObject => {
-                let removed = self.ed_mut(|e| e.selected_object.is_some_and(|i| e.remove_object(i))).unwrap_or(false);
+                let removed = self
+                    .ed_mut(|e| e.selected_object.is_some_and(|i| e.remove_object(i)))
+                    .unwrap_or(false);
                 if removed {
                     self.after_edit();
                 }
             }
             MapKey::Nudge(dx, dy) => {
-                let moved = self.ed_mut(|e| e.selected_object.is_some_and(|i| e.nudge_object(i, dx, dy))).unwrap_or(false);
+                let moved = self
+                    .ed_mut(|e| e.selected_object.is_some_and(|i| e.nudge_object(i, dx, dy)))
+                    .unwrap_or(false);
                 if moved {
                     self.after_stroke();
                     self.refresh_object_fields();
@@ -441,8 +474,14 @@ impl EditorApp {
                 let i = e.selected_object?;
                 let o = *e.room().objects.get(i)?;
                 let new = match field {
-                    ObjField::Id => Object { id: value as u8, ..o },
-                    ObjField::Variant => Object { variant: value as u8, ..o },
+                    ObjField::Id => Object {
+                        id: value as u8,
+                        ..o
+                    },
+                    ObjField::Variant => Object {
+                        variant: value as u8,
+                        ..o
+                    },
                     ObjField::X => Object { x: value, ..o },
                     ObjField::Y => Object { y: value, ..o },
                 };
@@ -462,7 +501,10 @@ impl EditorApp {
                 let i = e.selected_door?;
                 let d = *e.room().doors().get(i)?;
                 let new = match field {
-                    DoorField::DestRoom => Door { dest_room: value, ..d },
+                    DoorField::DestRoom => Door {
+                        dest_room: value,
+                        ..d
+                    },
                     DoorField::X => Door { x: value, ..d },
                     DoorField::Y => Door { y: value, ..d },
                     DoorField::DestX => Door { dest_x: value, ..d },
@@ -492,7 +534,9 @@ impl EditorApp {
         };
         let dest = door.dest_room as usize;
         if dest >= count {
-            self.say(&format!("Door leads to room {dest}, which does not exist ({count} rooms)"));
+            self.say(&format!(
+                "Door leads to room {dest}, which does not exist ({count} rooms)"
+            ));
             return;
         }
         match self.ed_mut(|e| e.select_room(dest)) {
@@ -500,7 +544,10 @@ impl EditorApp {
                 self.room_changed();
                 let map = self.h.map.get();
                 map.update_view(|v| v.center_on((door.dest_x as i32, door.dest_y as i32)));
-                self.say(&format!("Room {dest}: arrival point ({}, {})", door.dest_x, door.dest_y));
+                self.say(&format!(
+                    "Room {dest}: arrival point ({}, {})",
+                    door.dest_x, door.dest_y
+                ));
             }
             Some(Err(e)) => self.say(&format!("Could not load room {dest}: {e}")),
             None => {}
@@ -521,6 +568,11 @@ impl App for EditorApp {
     type Msg = Msg;
 
     fn update(&mut self, msg: Msg, ui: &mut Ui<Msg>) {
+        // The warning about unsaved changes is confirmed by asking again
+        // straight away; anything in between withdraws the confirmation.
+        if !matches!(msg, Msg::OpenRom | Msg::Quit) {
+            self.discard_armed = false;
+        }
         match msg {
             Msg::OpenRom => self.request_open(),
             Msg::RomChosen(path) => self.open_rom(path),
@@ -528,7 +580,10 @@ impl App for EditorApp {
             Msg::SaveAs => {
                 if let Some((dir, name)) = self.ed(|e| {
                     let target = crate::editor::default_edited_path(e.source_path());
-                    (target.parent().map(|p| p.to_path_buf()), target.file_name().map(|n| n.to_string_lossy().into_owned()))
+                    (
+                        target.parent().map(|p| p.to_path_buf()),
+                        target.file_name().map(|n| n.to_string_lossy().into_owned()),
+                    )
                 }) {
                     if let Some(dir) = dir {
                         self.save_dialog.set_initial_dir(dir);
@@ -540,11 +595,20 @@ impl App for EditorApp {
                 }
             }
             Msg::SaveAsChosen(path) => self.save(Some(path)),
-            Msg::Quit => ui.quit(),
+            Msg::Quit => {
+                if self.ed(|e| e.any_dirty()).unwrap_or(false) && !self.discard_armed {
+                    self.discard_armed = true;
+                    self.say("Unsaved changes. Save first, or choose Quit again to discard them.");
+                } else {
+                    ui.quit();
+                }
+            }
             Msg::Undo | Msg::Redo => {
                 self.gesture = Gesture::Idle;
                 let redo = matches!(msg, Msg::Redo);
-                let done = self.ed_mut(|e| if redo { e.redo() } else { e.undo() }).unwrap_or(false);
+                let done = self
+                    .ed_mut(|e| if redo { e.redo() } else { e.undo() })
+                    .unwrap_or(false);
                 if done {
                     self.after_edit();
                     self.say(if redo { "Redo" } else { "Undo" });
@@ -608,7 +672,9 @@ impl App for EditorApp {
                 self.select_object_row();
             }
             Msg::ObjectDelete => {
-                let removed = self.ed_mut(|e| e.selected_object.is_some_and(|i| e.remove_object(i))).unwrap_or(false);
+                let removed = self
+                    .ed_mut(|e| e.selected_object.is_some_and(|i| e.remove_object(i)))
+                    .unwrap_or(false);
                 if removed {
                     self.after_edit();
                 }
@@ -624,7 +690,10 @@ impl App for EditorApp {
             Msg::DoorField(field, value) => self.door_field(field, value),
             Msg::DoorGoto => self.goto_door_destination(),
             Msg::Music(value) => {
-                if self.ed_mut(|e| e.set_music(value.round().clamp(0.0, 255.0) as u8)).unwrap_or(false) {
+                if self
+                    .ed_mut(|e| e.set_music(value.round().clamp(0.0, 255.0) as u8))
+                    .unwrap_or(false)
+                {
                     self.after_edit();
                 }
             }

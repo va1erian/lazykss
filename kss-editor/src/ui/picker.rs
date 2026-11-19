@@ -34,16 +34,29 @@ pub struct TilePicker<M: 'static> {
 
 impl<M: 'static> TilePicker<M> {
     /// `wrap` maps a picked metatile id to the app's message.
-    pub fn new(ui: &Ui<M>, editor: SharedEditor, wrap: impl Fn(u16) -> M + 'static) -> Result<TilePicker<M>> {
+    pub fn new(
+        ui: &Ui<M>,
+        editor: SharedEditor,
+        wrap: impl Fn(u16) -> M + 'static,
+    ) -> Result<TilePicker<M>> {
         let control = Control::new(ui, &NodeSpec::new(NodeKind::Custom, Rect::default()))?;
         let mut scroller = Scroller::new();
         scroller.dpi = ui.dpi();
-        let state = Rc::new(RefCell::new(State { scroller, sheet: None, pressed: false }));
+        let state = Rc::new(RefCell::new(State {
+            scroller,
+            sheet: None,
+            pressed: false,
+        }));
 
         {
             let (state, theme, editor) = (Rc::clone(&state), ui.theme_handle(), Rc::clone(&editor));
             control.set_painter(Rc::new(move |canvas| {
-                paint(canvas, &editor.borrow(), &mut state.borrow_mut(), &theme.get());
+                paint(
+                    canvas,
+                    &editor.borrow(),
+                    &mut state.borrow_mut(),
+                    &theme.get(),
+                );
             }));
         }
         {
@@ -58,10 +71,13 @@ impl<M: 'static> TilePicker<M> {
                     Some(false) => ui.release_capture(),
                     None => {}
                 }
-                if message.is_some() || capture.is_some() || matches!(event, Event::MouseWheel { .. } | Event::Resize { .. }) {
+                if message.is_some()
+                    || capture.is_some()
+                    || matches!(event, Event::MouseWheel { .. } | Event::Resize { .. })
+                {
                     ui.invalidate(id);
                 }
-                message.map(|tile| wrap(tile))
+                message.map(&wrap)
             });
         }
         Ok(TilePicker { control, state })
@@ -110,14 +126,22 @@ fn tile_at(st: &State, count: usize, x: i32, y: i32) -> Option<u16> {
 }
 
 fn process(st: &mut State, event: &Event) -> (Option<u16>, Option<bool>) {
-    let count = st.sheet.as_ref().map_or(0, |(_, img)| img.height() as usize / CELL * COLUMNS);
+    let count = st
+        .sheet
+        .as_ref()
+        .map_or(0, |(_, img)| img.height() as usize / CELL * COLUMNS);
     match *event {
         Event::Resize { width, height } => {
             st.scroller.size = (width, height);
             st.scroller.clamp();
             (None, None)
         }
-        Event::MouseDown { x, y, button: MouseButton::Left, .. } => {
+        Event::MouseDown {
+            x,
+            y,
+            button: MouseButton::Left,
+            ..
+        } => {
             if st.scroller.press(x, y) {
                 return (None, st.scroller.dragging().then_some(true));
             }
@@ -136,7 +160,10 @@ fn process(st: &mut State, event: &Event) -> (Option<u16>, Option<bool>) {
             }
             (None, None)
         }
-        Event::MouseUp { button: MouseButton::Left, .. } => {
+        Event::MouseUp {
+            button: MouseButton::Left,
+            ..
+        } => {
             if st.scroller.end_drag() || std::mem::take(&mut st.pressed) {
                 return (None, Some(false));
             }
@@ -147,15 +174,27 @@ fn process(st: &mut State, event: &Event) -> (Option<u16>, Option<bool>) {
             st.pressed = false;
             (None, None)
         }
-        Event::MouseWheel { delta, horizontal: false, .. } => {
-            st.scroller.scroll_by(0, -(f32::from(delta) / 120.0 * WHEEL_STEP as f32).round() as i32);
+        Event::MouseWheel {
+            delta,
+            horizontal: false,
+            ..
+        } => {
+            st.scroller.scroll_by(
+                0,
+                -(f32::from(delta) / 120.0 * WHEEL_STEP as f32).round() as i32,
+            );
             (None, None)
         }
         _ => (None, None),
     }
 }
 
-fn paint(canvas: &mut dyn xui::backend::Canvas, editor: &Option<super::Editor>, st: &mut State, theme: &Theme) {
+fn paint(
+    canvas: &mut dyn xui::backend::Canvas,
+    editor: &Option<super::Editor>,
+    st: &mut State,
+    theme: &Theme,
+) {
     let origin = canvas.bounds();
     canvas.save();
     canvas.set_translation(origin.left as f32, origin.top as f32);
@@ -167,7 +206,8 @@ fn paint(canvas: &mut dyn xui::backend::Canvas, editor: &Option<super::Editor>, 
         let room = editor.current_index();
         if st.sheet.as_ref().is_none_or(|(r, _)| *r != room) {
             let fill = [0x30, 0x30, 0x38, 0xFF];
-            st.sheet = to_xui(&editor.tileset().metatile_sheet(COLUMNS, fill)).map(|img| (room, img));
+            st.sheet =
+                to_xui(&editor.tileset().metatile_sheet(COLUMNS, fill)).map(|img| (room, img));
         }
         if let Some((_, sheet)) = &st.sheet {
             st.scroller.content = (sheet.width() as i32, sheet.height() as i32);
@@ -175,12 +215,27 @@ fn paint(canvas: &mut dyn xui::backend::Canvas, editor: &Option<super::Editor>, 
             let view = st.scroller.view();
             let (ox, oy) = st.scroller.offset;
             canvas.push_clip(view);
-            canvas.draw_image(sheet, Rect::new(-ox, -oy, -ox + sheet.width() as i32, -oy + sheet.height() as i32));
+            canvas.draw_image(
+                sheet,
+                Rect::new(
+                    -ox,
+                    -oy,
+                    -ox + sheet.width() as i32,
+                    -oy + sheet.height() as i32,
+                ),
+            );
             let id = editor.tile as usize;
-            let (x, y) = ((id % COLUMNS * CELL) as i32 - ox, (id / COLUMNS * CELL) as i32 - oy);
+            let (x, y) = (
+                (id % COLUMNS * CELL) as i32 - ox,
+                (id / COLUMNS * CELL) as i32 - oy,
+            );
             let cell = Rect::new(x, y, x + CELL as i32, y + CELL as i32);
             canvas.stroke_rect(cell, theme.accent, 3.0);
-            canvas.stroke_rect(Rect::new(cell.left + 2, cell.top + 2, cell.right - 2, cell.bottom - 2), xui::Color::rgb(255, 255, 255), 1.0);
+            canvas.stroke_rect(
+                Rect::new(cell.left + 2, cell.top + 2, cell.right - 2, cell.bottom - 2),
+                xui::Color::rgb(255, 255, 255),
+                1.0,
+            );
             canvas.pop_clip();
         }
         st.scroller.paint(canvas, theme);

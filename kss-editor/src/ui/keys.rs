@@ -60,22 +60,60 @@ pub fn map_key(key: Key, mods: Modifiers) -> Option<MapKey> {
 mod tests {
     use super::*;
 
-    const CTRL: Modifiers = Modifiers { ctrl: true, shift: false, alt: false, win: false };
+    const CTRL: Modifiers = Modifiers {
+        ctrl: true,
+        shift: false,
+        alt: false,
+        win: false,
+    };
 
     #[test]
     fn ctrl_shortcuts() {
         assert!(matches!(shortcut(Key::Z, CTRL), Some(Msg::Undo)));
         assert!(matches!(shortcut(Key::Y, CTRL), Some(Msg::Redo)));
-        assert!(matches!(shortcut(Key::Z, Modifiers { shift: true, ..CTRL }), Some(Msg::Redo)));
-        assert!(matches!(shortcut(Key::S, Modifiers { shift: true, ..CTRL }), Some(Msg::SaveAs)));
+        assert!(matches!(
+            shortcut(
+                Key::Z,
+                Modifiers {
+                    shift: true,
+                    ..CTRL
+                }
+            ),
+            Some(Msg::Redo)
+        ));
+        assert!(matches!(
+            shortcut(
+                Key::S,
+                Modifiers {
+                    shift: true,
+                    ..CTRL
+                }
+            ),
+            Some(Msg::SaveAs)
+        ));
         assert!(shortcut(Key::Z, Modifiers::NONE).is_none());
     }
 
     #[test]
     fn map_keys() {
-        assert_eq!(map_key(Key::LEFT, Modifiers::NONE), Some(MapKey::Nudge(-1, 0)));
-        assert_eq!(map_key(Key::DOWN, Modifiers { shift: true, ..Modifiers::NONE }), Some(MapKey::Nudge(0, 8)));
-        assert_eq!(map_key(Key::B, Modifiers::NONE), Some(MapKey::Tool(Tool::Paint)));
+        assert_eq!(
+            map_key(Key::LEFT, Modifiers::NONE),
+            Some(MapKey::Nudge(-1, 0))
+        );
+        assert_eq!(
+            map_key(
+                Key::DOWN,
+                Modifiers {
+                    shift: true,
+                    ..Modifiers::NONE
+                }
+            ),
+            Some(MapKey::Nudge(0, 8))
+        );
+        assert_eq!(
+            map_key(Key::B, Modifiers::NONE),
+            Some(MapKey::Tool(Tool::Paint))
+        );
         assert_eq!(map_key(Key::B, CTRL), None);
     }
 }

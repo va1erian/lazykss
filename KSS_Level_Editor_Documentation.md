@@ -53,7 +53,8 @@ At the address its room pointer gives **[rom]**:
 ```
 +0    17  misc header: +2 song, +6 background scroll rate, +12 entrance style [community]
 +17    5  FF
-+22   25  graphics header (§5); bytes 20-24 are five object graphics slots
++22   24  graphics header (§5); bytes 20-23 are four object graphics slots
++46    1  a fifth object graphics slot (FF when unused)
 +47    7  99 01 01 01 01 01 99 in every Spring Breeze room
 +54    4  two words, unknown (non-zero in the first room of a stage)
 +58       six sections; each starts with a 16-bit pointer relative to itself
@@ -108,7 +109,7 @@ ways: compressed, raw, and raw-header-plus-compressed.
 | 10 | Background tilemap | raw `width, height` words, then compressed words |
 | 11-18 | More character sets (animated tiles), unused here | compressed |
 | 19 | Extra palette, applied first | raw |
-| 20-24 | Object graphics slots — a different id space (§6) | |
+| 20-23 | Object graphics slots, with a fifth at room offset +46 — a different id space (§6) | |
 
 A **raw palette** is `count, first_colour` then `count` BGR555 words, written
 to CGRAM from `first_colour` **[emu]**. Green Greens: `50 00` (rows 0-4) for
@@ -184,7 +185,9 @@ length - 1) or the long form `111CCCLL LLLLLLLL` (10-bit length - 1).
 
 Offsets are absolute, so a stream cannot be decompressed from its middle.
 `kss_core::compression::compress` does an optimal parse and is never larger
-than the original for the Spring Breeze rooms **[rom]**.
+than the original for the Spring Breeze rooms **[rom]**. The game's own
+decompressor has accepted every stream it produced so far (the rooms booted
+in §8), which is not proof for every command mix.
 
 ## 8. Saving
 
@@ -222,6 +225,9 @@ cells unlisted.
 `Room::sync_blocks` adds a record for every block placed since the room was
 loaded and drops the record of a block that was painted over; the editor
 calls it on save.
+
+A room holds at most 30,000 cells: both tile planes and the object list
+must fit one 64 KiB stream.
 
 The door list cannot grow: the editor changes existing doors but does not add
 any.

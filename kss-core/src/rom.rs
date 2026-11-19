@@ -57,7 +57,9 @@ impl Rom {
             )));
         }
         if &data[TITLE_OFFSET..TITLE_OFFSET + TITLE.len()] != TITLE {
-            return Err(RomError::NotKirbySuperStar("internal title does not match".into()));
+            return Err(RomError::NotKirbySuperStar(
+                "internal title does not match".into(),
+            ));
         }
         Ok(Self { data })
     }
@@ -66,23 +68,35 @@ impl Rom {
         Self::new(std::fs::read(path)?)
     }
 
-    /// Writes the image with a fresh checksum.
+    /// Writes the image with a fresh checksum. The data goes to a temporary
+    /// file beside `path` that then replaces it, so a write that fails
+    /// part-way (a full disk) leaves an existing file as it was.
     pub fn save(&mut self, path: &Path) -> Result<(), RomError> {
         self.fix_checksum();
-        std::fs::write(path, &self.data)?;
-        Ok(())
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(".writing");
+        let temporary = path.with_file_name(name);
+        let written =
+            std::fs::write(&temporary, &self.data).and_then(|()| std::fs::rename(&temporary, path));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        Ok(written?)
     }
 
     /// Looks for the ROM: `KSS_ROM`, then [`DEFAULT_ROM_NAME`] in the current
     /// directory and each of its ancestors.
     pub fn locate() -> Option<PathBuf> {
-        if let Some(path) = std::env::var_os("KSS_ROM").map(PathBuf::from) {
-            if path.is_file() {
-                return Some(path);
-            }
+        if let Some(path) = std::env::var_os("KSS_ROM")
+            .map(PathBuf::from)
+            .filter(|path| path.is_file())
+        {
+            return Some(path);
         }
         let cwd = std::env::current_dir().ok()?;
-        cwd.ancestors().map(|dir| dir.join(DEFAULT_ROM_NAME)).find(|p| p.is_file())
+        cwd.ancestors()
+            .map(|dir| dir.join(DEFAULT_ROM_NAME))
+            .find(|p| p.is_file())
     }
 
     pub fn data(&self) -> &[u8] {
@@ -103,7 +117,8 @@ impl Rom {
         let snes = self.data[offset] as usize
             | (self.data[offset + 1] as usize) << 8
             | (self.data[offset + 2] as usize) << 16;
-        snes.checked_sub(0xC0_0000).filter(|&pc| pc < self.data.len())
+        snes.checked_sub(0xC0_0000)
+            .filter(|&pc| pc < self.data.len())
     }
 
     pub fn slice(&self, offset: usize, len: usize) -> &[u8] {
@@ -123,7 +138,10 @@ impl Rom {
     /// taken with the checksum fields at their neutral `FFFF`/`0000` values).
     pub fn fix_checksum(&mut self) {
         self.write(CHECKSUM_COMPLEMENT, &[0xFF, 0xFF, 0x00, 0x00]);
-        let sum = self.data.iter().fold(0u16, |acc, &b| acc.wrapping_add(b as u16));
+        let sum = self
+            .data
+            .iter()
+            .fold(0u16, |acc, &b| acc.wrapping_add(b as u16));
         self.write(CHECKSUM, &sum.to_le_bytes());
         self.write(CHECKSUM_COMPLEMENT, &(!sum).to_le_bytes());
     }

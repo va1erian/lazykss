@@ -35,6 +35,11 @@ const SECTIONS_OFFSET: usize = 58;
 const SECTION_COUNT: usize = 6;
 const MISC_MUSIC: usize = 2;
 const DOOR_SIZE: usize = 10;
+/// Largest map [`Room::encode`] accepts: both tile planes and a full object
+/// list must fit the 64 KiB a compressed stream can hold.
+pub const MAX_CELLS: usize = 30_000;
+/// Most records a section can hold: its length is a 16-bit word.
+const MAX_BLOCKS: usize = 10_000;
 /// The section that lists breakable cells.
 const BLOCK_SECTION: usize = 3;
 /// Free runs shorter than this are not worth tracking.
@@ -47,14 +52,25 @@ const FREE_GUARD: usize = 16;
 pub enum RoomError {
     BadIndex(usize),
     /// The room pointer or a section pointer leads outside the image.
-    BadPointer { room: usize },
-    Decompress { room: usize, source: DecompressError },
+    BadPointer {
+        room: usize,
+    },
+    Decompress {
+        room: usize,
+        source: DecompressError,
+    },
     /// The blob is shorter than two `width*height` planes.
-    ShortMap { room: usize },
+    ShortMap {
+        room: usize,
+    },
     /// No free block large enough to move the room to.
-    NoFreeSpace { needed: usize },
-    /// The map does not match `width*height`, or is too large to compress.
+    NoFreeSpace {
+        needed: usize,
+    },
+    /// The map does not match `width*height`.
     BadDimensions,
+    /// More than [`MAX_CELLS`] cells, or too many objects for one stream.
+    TooLarge,
     /// The compressor's output did not inflate back to the input.
     RoundTrip,
 }
@@ -68,6 +84,10 @@ impl std::fmt::Display for RoomError {
             Self::ShortMap { room } => write!(f, "room {room}: map data is shorter than its size"),
             Self::NoFreeSpace { needed } => write!(f, "no free space for {needed} bytes"),
             Self::BadDimensions => write!(f, "tile map does not match the room size"),
+            Self::TooLarge => write!(
+                f,
+                "the room is too large to store (at most {MAX_CELLS} cells)"
+            ),
             Self::RoundTrip => write!(f, "compression self-check failed"),
         }
     }
@@ -148,9 +168,18 @@ pub struct Room {
 
 impl Room {
     pub fn load(rom: &Rom, tables: &Tables, index: usize) -> Result<Self, RoomError> {
-        let offset = *tables.room_offsets.get(index).ok_or(RoomError::BadIndex(index))?;
+        let offset = *tables
+            .room_offsets
+            .get(index)
+            .ok_or(RoomError::BadIndex(index))?;
         let bad = RoomError::BadPointer { room: index };
         let len = rom.data().len();
+        if offset
+            .checked_add(SECTIONS_OFFSET + 2)
+            .is_none_or(|end| end > len)
+        {
+            return Err(bad);
+        }
         let mut section = offset + SECTIONS_OFFSET;
         for _ in 0..SECTION_COUNT {
             if section + 2 > len {
@@ -169,13 +198,20 @@ impl Room {
         let width = rom.u16(section + 2) as usize;
         let height = rom.u16(section + 4) as usize;
         let blob_at = section + 6;
-        let (blob, packed_len) = compression::decompress(&rom.data()[blob_at..])
-            .map_err(|source| RoomError::Decompress { room: index, source })?;
+        let (blob, packed_len) =
+            compression::decompress(&rom.data()[blob_at..]).map_err(|source| {
+                RoomError::Decompress {
+                    room: index,
+                    source,
+                }
+            })?;
         let cells = width * height;
         if blob.len() < cells * 2 {
             return Err(RoomError::ShortMap { room: index });
         }
-        let tiles = (0..cells).map(|i| blob[i] as u16 | (blob[cells + i] as u16) << 8).collect();
+        let tiles = (0..cells)
+            .map(|i| blob[i] as u16 | (blob[cells + i] as u16) << 8)
+            .collect();
         let mut objects = Vec::new();
         let mut at = cells * 2;
         while at + 6 <= blob.len() && !(blob[at] == 0xFF && blob[at + 1] == 0xFF) {
@@ -257,7 +293,10 @@ impl Room {
         for _ in 0..index {
             start += u16::from_le_bytes([self.head[start], self.head[start + 1]]) as usize;
         }
-        (start, start + u16::from_le_bytes([self.head[start], self.head[start + 1]]) as usize)
+        (
+            start,
+            start + u16::from_le_bytes([self.head[start], self.head[start + 1]]) as usize,
+        )
     }
 
     /// The payload of section `index` (0-5), terminator included.
@@ -300,12 +339,18 @@ impl Room {
     /// Replaces the list of breakable cells. Records are stored in map
     /// order, as the game's own rooms have them.
     pub fn set_blocks(&mut self, blocks: &[Block]) {
-        let mut sorted: Vec<&Block> = blocks.iter().filter(|b| b.x < self.width && b.y < self.height).collect();
+        // A record holds the cell's byte offset in the map as a word.
+        let fits = |b: &&Block| {
+            b.x < self.width && b.y < self.height && (b.y * self.width + b.x) * 2 <= 0xFFFF
+        };
+        let mut sorted: Vec<&Block> = blocks.iter().filter(fits).collect();
         sorted.sort_by_key(|b| (b.y, b.x));
         sorted.dedup_by_key(|b| (b.y, b.x));
+        sorted.truncate(MAX_BLOCKS);
         let mut payload = Vec::with_capacity(sorted.len() * 6 + 2);
         for block in sorted {
-            payload.extend_from_slice(&(((block.y * self.width + block.x) * 2) as u16).to_le_bytes());
+            payload
+                .extend_from_slice(&(((block.y * self.width + block.x) * 2) as u16).to_le_bytes());
             payload.extend_from_slice(&block.after.to_le_bytes());
             payload.extend_from_slice(&block.extra.to_le_bytes());
         }
@@ -313,31 +358,45 @@ impl Room {
         self.set_section(BLOCK_SECTION, &payload);
     }
 
-    /// Brings the list of breakable cells in line with the map: a cell that
-    /// now holds a `breakable` metatile and did not in `before` gets a record
-    /// (breaking to the empty tile), and a record is dropped when its cell was a block in `before`
-    /// (the tiles as last loaded or saved) and no longer is. Other records
-    /// are left alone: the game's rooms also list decoration cells.
+    /// Brings the list of breakable cells in line with the map.
+    ///
+    /// `before(x, y)` is the tile the cell held when the room was last
+    /// loaded or saved (`None` outside that map). A cell that now holds a
+    /// `breakable` metatile and did not then gets a record: the one in
+    /// `remembered` for that cell when there is one (so a block that was
+    /// painted away and put back keeps what it breaks into), else one that
+    /// breaks to the empty tile. A record is dropped when its cell was a
+    /// block then and no longer is. Other records are left alone: the game's
+    /// rooms also list decoration cells, and leave a few blocks unlisted.
     ///
     /// Returns true when the list changed.
-    pub fn sync_blocks(&mut self, breakable: impl Fn(u16) -> bool, before: &[u16]) -> bool {
+    pub fn sync_blocks(
+        &mut self,
+        breakable: impl Fn(u16) -> bool,
+        before: impl Fn(usize, usize) -> Option<u16>,
+        remembered: &[Block],
+    ) -> bool {
         let old = self.blocks();
         let mut blocks: Vec<Block> = old
             .iter()
             .copied()
+            .filter(|b| b.x < self.width && b.y < self.height)
             .filter(|b| {
-                let cell = b.y * self.width + b.x;
-                let was_block = before.len() == self.tiles.len() && breakable(before[cell]);
-                b.x < self.width && b.y < self.height && !(was_block && !breakable(self.tiles[cell]))
+                !(before(b.x, b.y).is_some_and(&breakable) && !breakable(self.tile(b.x, b.y)))
             })
             .collect();
         for y in 0..self.height {
             for x in 0..self.width {
-                // Only blocks placed since `before`: a few original rooms
-                // have unlisted blocks, and those stay as they are.
-                let placed = before.get(y * self.width + x) != Some(&self.tile(x, y));
-                if placed && breakable(self.tile(x, y)) && !blocks.iter().any(|b| (b.x, b.y) == (x, y)) {
-                    blocks.push(Block { x, y, after: 0, extra: 0 });
+                let tile = self.tile(x, y);
+                let placed = before(x, y) != Some(tile);
+                if placed && breakable(tile) && !blocks.iter().any(|b| (b.x, b.y) == (x, y)) {
+                    let known = remembered.iter().find(|b| (b.x, b.y) == (x, y));
+                    blocks.push(known.copied().unwrap_or(Block {
+                        x,
+                        y,
+                        after: 0,
+                        extra: 0,
+                    }));
                 }
             }
         }
@@ -365,7 +424,9 @@ impl Room {
     /// Rewrites door `index` in place. The number of doors is fixed: the
     /// section that holds them cannot grow without moving the others.
     pub fn set_door(&mut self, index: usize, door: Door) -> bool {
-        let Some(at) = self.door_slots().nth(index) else { return false };
+        let Some(at) = self.door_slots().nth(index) else {
+            return false;
+        };
         let words = [door.dest_room, door.x, door.y, door.dest_x, door.dest_y];
         for (i, w) in words.iter().enumerate() {
             self.head[at + i * 2..at + i * 2 + 2].copy_from_slice(&w.to_le_bytes());
@@ -409,12 +470,15 @@ impl Room {
 
     /// The whole room block as it is written to the ROM.
     pub fn encode(&self) -> Result<Vec<u8>, RoomError> {
-        if self.tiles.len() != self.width * self.height || self.width > 0xFFFF || self.height > 0xFFFF {
+        if self.tiles.len() != self.width * self.height
+            || self.width > 0xFFFF
+            || self.height > 0xFFFF
+        {
             return Err(RoomError::BadDimensions);
         }
         let blob = self.blob();
-        if blob.len() > compression::MAX_OUTPUT {
-            return Err(RoomError::BadDimensions);
+        if self.tiles.len() > MAX_CELLS || blob.len() > compression::MAX_OUTPUT {
+            return Err(RoomError::TooLarge);
         }
         let packed = compression::compress(&blob);
         match compression::decompress(&packed) {
@@ -423,7 +487,8 @@ impl Room {
         }
         let mut block = self.head.clone();
         block[self.size_at..self.size_at + 2].copy_from_slice(&(self.width as u16).to_le_bytes());
-        block[self.size_at + 2..self.size_at + 4].copy_from_slice(&(self.height as u16).to_le_bytes());
+        block[self.size_at + 2..self.size_at + 4]
+            .copy_from_slice(&(self.height as u16).to_le_bytes());
         block.extend_from_slice(&packed);
         Ok(block)
     }
@@ -440,8 +505,9 @@ impl Room {
         if moved {
             // The old block is free too, but data is never moved onto itself:
             // a failed write must leave the original intact.
-            let target = find_free(rom.data(), block.len())
-                .ok_or(RoomError::NoFreeSpace { needed: block.len() })?;
+            let target = find_free(rom.data(), block.len()).ok_or(RoomError::NoFreeSpace {
+                needed: block.len(),
+            })?;
             rom.write(target, &block);
             rom.write_long_pointer(tables.room_table + self.index * 4, target);
             let shared = tables
@@ -461,7 +527,12 @@ impl Room {
         }
         self.stored_len = block.len();
         rom.fix_checksum();
-        Ok(SaveReport { offset: self.offset, len: block.len(), previous_len: old.1, moved })
+        Ok(SaveReport {
+            offset: self.offset,
+            len: block.len(),
+            previous_len: old.1,
+            moved,
+        })
     }
 }
 
@@ -479,16 +550,24 @@ pub struct SaveReport {
 /// bytes excluded. Only this padding is treated as free: a run of `FF` inside
 /// a bank can be data (blank graphics, tables).
 fn free_runs(data: &[u8]) -> impl Iterator<Item = (usize, usize)> + '_ {
-    data.chunks(0x1_0000).enumerate().filter_map(|(bank, bytes)| {
-        let used = bytes.iter().rposition(|&b| b != 0xFF).map_or(0, |last| last + 1);
-        let run = bytes.len() - used;
-        (run >= MIN_FREE_RUN).then(|| (bank * 0x1_0000 + used + FREE_GUARD, run - FREE_GUARD))
-    })
+    data.chunks(0x1_0000)
+        .enumerate()
+        .filter_map(|(bank, bytes)| {
+            let used = bytes
+                .iter()
+                .rposition(|&b| b != 0xFF)
+                .map_or(0, |last| last + 1);
+            let run = bytes.len() - used;
+            (run >= MIN_FREE_RUN).then(|| (bank * 0x1_0000 + used + FREE_GUARD, run - FREE_GUARD))
+        })
 }
 
 /// Finds `needed` free bytes, in the smallest bank padding that fits.
 fn find_free(data: &[u8], needed: usize) -> Option<usize> {
-    free_runs(data).filter(|&(_, len)| len >= needed).min_by_key(|&(_, len)| len).map(|(start, _)| start)
+    free_runs(data)
+        .filter(|&(_, len)| len >= needed)
+        .min_by_key(|&(_, len)| len)
+        .map(|(start, _)| start)
 }
 
 /// Total free bytes [`Room::save`] could move rooms into.
@@ -518,7 +597,12 @@ pub struct Tables {
 
 /// The four stages of Spring Breeze are the first four levels of the table.
 pub const SPRING_BREEZE_LEVELS: std::ops::Range<usize> = 0..4;
-const SPRING_BREEZE_NAMES: [&str; 4] = ["Green Greens", "Float Islands", "Bubbly Clouds", "Mt. Dedede"];
+const SPRING_BREEZE_NAMES: [&str; 4] = [
+    "Green Greens",
+    "Float Islands",
+    "Bubbly Clouds",
+    "Mt. Dedede",
+];
 const LEVEL_COUNT: usize = 60;
 
 impl Tables {
@@ -527,26 +611,46 @@ impl Tables {
         let room_table = directory(0);
         let gfx_table = directory(1);
         let gfx_end = directory(2);
-        let room_count = (gfx_table - room_table) / 4;
-        let room_offsets =
-            (0..room_count).map(|i| rom.long_pointer(room_table + i * 4).unwrap_or(usize::MAX)).collect();
+        // A hacked image can have the tables in any order: never underflow.
+        let room_count = gfx_table.saturating_sub(room_table) / 4;
+        let room_offsets = (0..room_count)
+            .map(|i| rom.long_pointer(room_table + i * 4).unwrap_or(usize::MAX))
+            .collect();
         let level_table = directory(6);
         let first_room = |level: usize| {
-            let entry = MASTER_TABLE + rom.u16(level_table + level * 2) as usize;
+            let at = level_table + level * 2;
+            if at + 2 > rom.data().len() {
+                return room_count;
+            }
+            let entry = MASTER_TABLE + rom.u16(at) as usize;
             (entry.saturating_sub(room_table) / 4).min(room_count)
         };
         let levels = (0..LEVEL_COUNT)
             .map(|index| {
                 let start = first_room(index);
-                let end = if index + 1 < LEVEL_COUNT { first_room(index + 1) } else { room_count };
+                let end = if index + 1 < LEVEL_COUNT {
+                    first_room(index + 1)
+                } else {
+                    room_count
+                };
                 let name = match SPRING_BREEZE_NAMES.get(index) {
                     Some(name) => (*name).to_string(),
                     None => format!("Level {index}"),
                 };
-                Level { index, name, rooms: start..end.max(start) }
+                Level {
+                    index,
+                    name,
+                    rooms: start..end.max(start),
+                }
             })
             .collect();
-        Self { room_table, gfx_table, gfx_count: (gfx_end - gfx_table) / 3, room_offsets, levels }
+        Self {
+            room_table,
+            gfx_table,
+            gfx_count: gfx_end.saturating_sub(gfx_table) / 3,
+            room_offsets,
+            levels,
+        }
     }
 
     pub fn room_count(&self) -> usize {
@@ -555,7 +659,9 @@ impl Tables {
 
     /// File offset of resource `index` of the graphics/palette table.
     pub fn resource(&self, rom: &Rom, index: usize) -> Option<usize> {
-        (index > 0 && index < self.gfx_count).then(|| rom.long_pointer(self.gfx_table + index * 3)).flatten()
+        (index > 0 && index < self.gfx_count)
+            .then(|| rom.long_pointer(self.gfx_table + index * 3))
+            .flatten()
     }
 }
 
@@ -581,11 +687,36 @@ mod tests {
         assert_eq!(room.tile(15, 0), 0x0A0);
         assert_eq!(room.tile(0, 7), 0x00C);
         assert_eq!(room.objects.len(), 8);
-        assert_eq!(room.objects[0], Object { variant: 0, id: 0x72, x: 0x18C, y: 0x84 });
-        assert_eq!(room.objects[2], Object { variant: 0, id: 0x1A, x: 0x22D, y: 0x74 });
+        assert_eq!(
+            room.objects[0],
+            Object {
+                variant: 0,
+                id: 0x72,
+                x: 0x18C,
+                y: 0x84
+            }
+        );
+        assert_eq!(
+            room.objects[2],
+            Object {
+                variant: 0,
+                id: 0x1A,
+                x: 0x22D,
+                y: 0x74
+            }
+        );
         let doors = room.doors();
         assert_eq!(doors.len(), 2);
-        assert_eq!(doors[0], Door { dest_room: 2, x: 0x180, y: 0x78, dest_x: 0x9C, dest_y: 0x6C });
+        assert_eq!(
+            doors[0],
+            Door {
+                dest_room: 2,
+                x: 0x180,
+                y: 0x78,
+                dest_x: 0x9C,
+                dest_y: 0x6C
+            }
+        );
         assert!(!doors[1].has_trigger());
         assert_eq!(room.stored_len, 0x30_225F - 0x30_20EF);
     }
@@ -596,7 +727,9 @@ mod tests {
         let tables = Tables::load(&rom);
         let mut loaded = 0;
         for index in 0..tables.room_count() {
-            let Ok(room) = Room::load(&rom, &tables, index) else { continue };
+            let Ok(room) = Room::load(&rom, &tables, index) else {
+                continue;
+            };
             loaded += 1;
             let block = room.encode().unwrap();
             // Re-parse the encoded block from a scratch image.
@@ -620,7 +753,11 @@ mod tests {
         for index in tables.levels[0].rooms.start..tables.levels[3].rooms.end {
             let mut room = Room::load(&rom, &tables, index).unwrap();
             let report = room.save(&mut rom, &mut tables).unwrap();
-            assert!(!report.moved, "room {index}: {} > {}", report.len, report.previous_len);
+            assert!(
+                !report.moved,
+                "room {index}: {} > {}",
+                report.len, report.previous_len
+            );
         }
     }
 
@@ -636,7 +773,12 @@ mod tests {
             seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
             *tile = (seed >> 16) as u16 % 300;
         }
-        room.objects.push(Object { variant: 0, id: 1, x: 100, y: 100 });
+        room.objects.push(Object {
+            variant: 0,
+            id: 1,
+            x: 100,
+            y: 100,
+        });
         let report = room.save(&mut rom, &mut tables).unwrap();
         assert!(report.moved);
         let back = Room::load(&rom, &Tables::load(&rom), 1).unwrap();
@@ -660,32 +802,84 @@ mod tests {
         let stars = Room::load(&rom, &tables, 3).unwrap();
         let blocks = stars.blocks();
         assert_eq!(blocks.len(), 8);
-        assert_eq!(blocks[0], Block { x: 19, y: 3, after: 0, extra: 0 });
-        assert_eq!(blocks[4], Block { x: 19, y: 4, after: 0xAC, extra: 0x57 });
+        assert_eq!(
+            blocks[0],
+            Block {
+                x: 19,
+                y: 3,
+                after: 0,
+                extra: 0
+            }
+        );
+        assert_eq!(
+            blocks[4],
+            Block {
+                x: 19,
+                y: 4,
+                after: 0xAC,
+                extra: 0x57
+            }
+        );
         // Room 1 has none; add one and reload it from the image.
         let mut room = Room::load(&rom, &tables, 1).unwrap();
         assert!(room.blocks().is_empty());
         let doors = room.doors();
         room.set_tile(3, 5, 3);
-        room.set_blocks(&[Block { x: 3, y: 5, after: 0, extra: 0 }]);
+        room.set_blocks(&[Block {
+            x: 3,
+            y: 5,
+            after: 0,
+            extra: 0,
+        }]);
         room.save(&mut rom, &mut tables).unwrap();
         let back = Room::load(&rom, &tables, 1).unwrap();
-        assert_eq!(back.blocks(), [Block { x: 3, y: 5, after: 0, extra: 0 }]);
+        assert_eq!(
+            back.blocks(),
+            [Block {
+                x: 3,
+                y: 5,
+                after: 0,
+                extra: 0
+            }]
+        );
         assert_eq!(back.doors(), doors);
         assert_eq!(back.tiles, room.tiles);
         assert_eq!((back.width, back.height), (100, 8));
         // Syncing a room that already lists its blocks changes nothing.
         let tiles = crate::gfx::Tileset::for_room(&original, &Tables::load(&original), &stars);
         let mut synced = stars.clone();
-        assert!(!synced.sync_blocks(|t| tiles.is_breakable(t), &stars.tiles));
+        let was = |room: &Room| {
+            let (width, tiles) = (room.width, room.tiles.clone());
+            move |x: usize, y: usize| tiles.get(y * width + x).copied()
+        };
+        assert!(!synced.sync_blocks(|t| tiles.is_breakable(t), was(&stars), &blocks));
         // A new star block gets a record; painting it away drops it again.
         synced.set_tile(2, 2, 0x56);
-        assert!(synced.sync_blocks(|t| tiles.is_breakable(t), &stars.tiles));
-        assert!(synced.blocks().contains(&Block { x: 2, y: 2, after: 0, extra: 0 }));
-        let with_block = synced.tiles.clone();
+        assert!(synced.sync_blocks(|t| tiles.is_breakable(t), was(&stars), &blocks));
+        assert!(synced.blocks().contains(&Block {
+            x: 2,
+            y: 2,
+            after: 0,
+            extra: 0
+        }));
+        let with_block = synced.clone();
         synced.set_tile(2, 2, 0);
-        assert!(synced.sync_blocks(|t| tiles.is_breakable(t), &with_block));
+        assert!(synced.sync_blocks(|t| tiles.is_breakable(t), was(&with_block), &blocks));
         assert_eq!(synced.blocks(), blocks);
+        // A listed block painted away and put back keeps what it breaks into.
+        synced.set_tile(19, 4, 0);
+        assert!(synced.sync_blocks(|t| tiles.is_breakable(t), was(&stars), &blocks));
+        assert_eq!(synced.blocks().len(), 7);
+        let without = synced.clone();
+        synced.set_tile(19, 4, 0x56);
+        assert!(synced.sync_blocks(|t| tiles.is_breakable(t), was(&without), &blocks));
+        assert_eq!(synced.blocks(), blocks);
+        // Resizing keeps each record on its cell.
+        let mut wide = stars.clone();
+        wide.resize(40, 8);
+        assert_eq!(wide.blocks(), blocks);
+        wide.resize(20, 8);
+        assert_eq!(wide.blocks(), [blocks[0], blocks[4]]);
         // Writing a room's own list back changes nothing.
         let mut same = stars.clone();
         same.set_blocks(&blocks);

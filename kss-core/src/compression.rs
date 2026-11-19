@@ -35,7 +35,9 @@ impl std::fmt::Display for DecompressError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnexpectedEof => write!(f, "compressed stream is truncated"),
-            Self::BadReference { at } => write!(f, "invalid back-reference at input offset {at:#x}"),
+            Self::BadReference { at } => {
+                write!(f, "invalid back-reference at input offset {at:#x}")
+            }
             Self::TooLarge => write!(f, "decompressed data exceeds 64 KiB"),
         }
     }
@@ -50,7 +52,12 @@ impl std::error::Error for DecompressError {}
 pub fn decompress(input: &[u8]) -> Result<(Vec<u8>, usize), DecompressError> {
     let mut out: Vec<u8> = Vec::new();
     let mut pos = 0usize;
-    let byte = |pos: usize| input.get(pos).copied().ok_or(DecompressError::UnexpectedEof);
+    let byte = |pos: usize| {
+        input
+            .get(pos)
+            .copied()
+            .ok_or(DecompressError::UnexpectedEof)
+    };
     loop {
         let at = pos;
         let control = byte(pos)?;
@@ -67,7 +74,9 @@ pub fn decompress(input: &[u8]) -> Result<(Vec<u8>, usize), DecompressError> {
         };
         match cmd {
             0 => {
-                let run = input.get(pos..pos + len).ok_or(DecompressError::UnexpectedEof)?;
+                let run = input
+                    .get(pos..pos + len)
+                    .ok_or(DecompressError::UnexpectedEof)?;
                 out.extend_from_slice(run);
                 pos += len;
             }
@@ -95,11 +104,19 @@ pub fn decompress(input: &[u8]) -> Result<(Vec<u8>, usize), DecompressError> {
                 let offset = (byte(pos)? as usize) << 8 | byte(pos + 1)? as usize;
                 pos += 2;
                 for i in 0..len {
-                    let src = if cmd == 6 { offset.checked_sub(i) } else { Some(offset + i) };
+                    let src = if cmd == 6 {
+                        offset.checked_sub(i)
+                    } else {
+                        Some(offset + i)
+                    };
                     let value = src
                         .and_then(|s| out.get(s).copied())
                         .ok_or(DecompressError::BadReference { at })?;
-                    out.push(if cmd == 5 { value.reverse_bits() } else { value });
+                    out.push(if cmd == 5 {
+                        value.reverse_bits()
+                    } else {
+                        value
+                    });
                 }
             }
         }
@@ -164,12 +181,22 @@ fn candidates(data: &[u8]) -> Vec<[Candidate; KINDS]> {
         if pos > 0 {
             let p = pos - 1;
             if p + 2 < n {
-                forward.entry([data[p], data[p + 1], data[p + 2]]).or_default().push(p as u32);
-                let bits = [data[p].reverse_bits(), data[p + 1].reverse_bits(), data[p + 2].reverse_bits()];
+                forward
+                    .entry([data[p], data[p + 1], data[p + 2]])
+                    .or_default()
+                    .push(p as u32);
+                let bits = [
+                    data[p].reverse_bits(),
+                    data[p + 1].reverse_bits(),
+                    data[p + 2].reverse_bits(),
+                ];
                 reversed.entry(bits).or_default().push(p as u32);
             }
             if p >= 2 {
-                backward.entry([data[p], data[p - 1], data[p - 2]]).or_default().push(p as u32);
+                backward
+                    .entry([data[p], data[p - 1], data[p - 2]])
+                    .or_default()
+                    .push(p as u32);
             }
         }
         let rest = &data[pos..];
@@ -177,39 +204,72 @@ fn candidates(data: &[u8]) -> Vec<[Candidate; KINDS]> {
         let mut found = [Candidate::default(); KINDS];
 
         let run = rest[..limit].iter().take_while(|&&b| b == rest[0]).count();
-        found[0] = Candidate { cmd: 1, max: run as u16, arg: rest[0] as u16 };
+        found[0] = Candidate {
+            cmd: 1,
+            max: run as u16,
+            arg: rest[0] as u16,
+        };
         if rest.len() >= 2 {
             let pairs = rest
                 .chunks_exact(2)
                 .take(MAX_RUN)
                 .take_while(|c| c[0] == rest[0] && c[1] == rest[1])
                 .count();
-            found[1] = Candidate { cmd: 2, max: pairs as u16, arg: (rest[0] as u16) << 8 | rest[1] as u16 };
-        }
-        let rising =
-            rest[..limit].iter().enumerate().take_while(|&(i, &b)| b == rest[0].wrapping_add(i as u8)).count();
-        found[2] = Candidate { cmd: 3, max: rising as u16, arg: rest[0] as u16 };
-
-        if rest.len() >= 3 {
-            let key = [rest[0], rest[1], rest[2]];
-            let mut longest = |slot: usize, cmd: u8, list: Option<&Vec<u32>>, len_at: &dyn Fn(usize) -> usize| {
-                for &start in list.into_iter().flatten().rev().take(CHAIN) {
-                    let len = len_at(start as usize);
-                    if len > found[slot].max as usize {
-                        found[slot] = Candidate { cmd, max: len as u16, arg: start as u16 };
-                    }
-                }
+            found[1] = Candidate {
+                cmd: 2,
+                max: pairs as u16,
+                arg: (rest[0] as u16) << 8 | rest[1] as u16,
             };
+        }
+        let rising = rest[..limit]
+            .iter()
+            .enumerate()
+            .take_while(|&(i, &b)| b == rest[0].wrapping_add(i as u8))
+            .count();
+        found[2] = Candidate {
+            cmd: 3,
+            max: rising as u16,
+            arg: rest[0] as u16,
+        };
+
+        // A run that already spans the whole window costs two or three bytes:
+        // no back-reference beats it, and uniform data is where the search
+        // for one is slowest.
+        if rest.len() >= 3 && run < limit {
+            let key = [rest[0], rest[1], rest[2]];
+            let mut longest =
+                |slot: usize, cmd: u8, list: Option<&Vec<u32>>, len_at: &dyn Fn(usize) -> usize| {
+                    for &start in list.into_iter().flatten().rev().take(CHAIN) {
+                        let len = len_at(start as usize);
+                        if len > found[slot].max as usize {
+                            found[slot] = Candidate {
+                                cmd,
+                                max: len as u16,
+                                arg: start as u16,
+                            };
+                        }
+                        // Nothing is longer than a full-length match.
+                        if len == limit {
+                            break;
+                        }
+                    }
+                };
             // The source of a forward copy may run into the bytes being
             // written: the decompressor copies one byte at a time.
             longest(3, 4, forward.get(&key), &|start| {
-                (0..limit).take_while(|&i| data[start + i] == rest[i]).count()
+                (0..limit)
+                    .take_while(|&i| data[start + i] == rest[i])
+                    .count()
             });
             longest(4, 5, reversed.get(&key), &|start| {
-                (0..limit).take_while(|&i| data[start + i].reverse_bits() == rest[i]).count()
+                (0..limit)
+                    .take_while(|&i| data[start + i].reverse_bits() == rest[i])
+                    .count()
             });
             longest(5, 6, backward.get(&key), &|start| {
-                (0..limit.min(start + 1)).take_while(|&i| data[start - i] == rest[i]).count()
+                (0..limit.min(start + 1))
+                    .take_while(|&i| data[start - i] == rest[i])
+                    .count()
             });
         }
         all.push(found);
@@ -288,13 +348,25 @@ mod tests {
 
     #[test]
     fn decodes_each_command() {
-        assert_eq!(decompress(&[0x02, 0xAA, 0xBB, 0xCC, 0xFF]).unwrap().0, [0xAA, 0xBB, 0xCC]);
+        assert_eq!(
+            decompress(&[0x02, 0xAA, 0xBB, 0xCC, 0xFF]).unwrap().0,
+            [0xAA, 0xBB, 0xCC]
+        );
         assert_eq!(decompress(&[0x24, 0xDD, 0xFF]).unwrap().0, [0xDD; 5]);
         assert_eq!(decompress(&[0x41, 1, 2, 0xFF]).unwrap().0, [1, 2, 1, 2]);
         assert_eq!(decompress(&[0x63, 7, 0xFF]).unwrap().0, [7, 8, 9, 10]);
-        assert_eq!(decompress(&[0x02, 1, 2, 3, 0x82, 0, 0, 0xFF]).unwrap().0, [1, 2, 3, 1, 2, 3]);
-        assert_eq!(decompress(&[0x00, 0x01, 0xA0, 0, 0, 0xFF]).unwrap().0, [0x01, 0x80]);
-        assert_eq!(decompress(&[0x02, 1, 2, 3, 0xC2, 0, 2, 0xFF]).unwrap().0, [1, 2, 3, 3, 2, 1]);
+        assert_eq!(
+            decompress(&[0x02, 1, 2, 3, 0x82, 0, 0, 0xFF]).unwrap().0,
+            [1, 2, 3, 1, 2, 3]
+        );
+        assert_eq!(
+            decompress(&[0x00, 0x01, 0xA0, 0, 0, 0xFF]).unwrap().0,
+            [0x01, 0x80]
+        );
+        assert_eq!(
+            decompress(&[0x02, 1, 2, 3, 0xC2, 0, 2, 0xFF]).unwrap().0,
+            [1, 2, 3, 3, 2, 1]
+        );
         // Extended form: 8-bit RLE of 96 zeroes, as in Green Greens room 1.
         assert_eq!(decompress(&[0xE4, 0x5F, 0x00, 0xFF]).unwrap().0, [0u8; 96]);
     }
@@ -302,7 +374,25 @@ mod tests {
     #[test]
     fn reports_malformed_streams() {
         assert_eq!(decompress(&[0x02, 1]), Err(DecompressError::UnexpectedEof));
-        assert_eq!(decompress(&[0x80, 0, 0, 0xFF]), Err(DecompressError::BadReference { at: 0 }));
+        assert_eq!(
+            decompress(&[0x80, 0, 0, 0xFF]),
+            Err(DecompressError::BadReference { at: 0 })
+        );
+    }
+
+    #[test]
+    fn uniform_data_compresses_quickly() {
+        // An empty 64 KiB map: sixty-four long runs, found without searching
+        // for back-references at every position.
+        let started = std::time::Instant::now();
+        let packed = compress(&[0u8; MAX_OUTPUT]);
+        assert!(packed.len() <= 64 * 3 + 1, "{} bytes", packed.len());
+        assert!(
+            started.elapsed().as_secs() < 5,
+            "took {:?}",
+            started.elapsed()
+        );
+        round_trip(&[0u8; MAX_OUTPUT]);
     }
 
     #[test]
@@ -315,7 +405,11 @@ mod tests {
         let mut seed = 0x1234_5678u32;
         for i in 0..20000u32 {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            mixed.push(if i % 97 < 40 { (seed >> 24) as u8 } else { (i / 50) as u8 });
+            mixed.push(if i % 97 < 40 {
+                (seed >> 24) as u8
+            } else {
+                (i / 50) as u8
+            });
         }
         round_trip(&mixed);
         // Mirrored and bit-reversed repeats exercise commands 5 and 6.
@@ -324,7 +418,11 @@ mod tests {
         tricky.extend(base.iter().rev());
         tricky.extend(base.iter().map(|b| b.reverse_bits()));
         let packed = compress(&tricky);
-        assert!(packed.len() < 100, "mirrors should be found: {}", packed.len());
+        assert!(
+            packed.len() < 100,
+            "mirrors should be found: {}",
+            packed.len()
+        );
         round_trip(&tricky);
     }
 }

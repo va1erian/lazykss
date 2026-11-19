@@ -11,5 +11,5 @@ pub mod sprites;
 
 pub use gfx::{Image, Layers, Tileset};
 pub use rom::Rom;
-pub use sprites::{ObjectSprites, Sprite};
 pub use room::{Block, CELL, Door, Level, Object, Room, SaveReport, Tables};
+pub use sprites::{ObjectSprites, Sprite};

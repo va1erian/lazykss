@@ -59,7 +59,10 @@ impl ViewState {
     /// The room pixel under a point of the node (may lie outside the room).
     pub fn to_room(&self, x: i32, y: i32) -> (i32, i32) {
         let (ox, oy) = self.scroller.offset;
-        ((x + ox).div_euclid(self.zoom), (y + oy).div_euclid(self.zoom))
+        (
+            (x + ox).div_euclid(self.zoom),
+            (y + oy).div_euclid(self.zoom),
+        )
     }
 
     /// The cell containing a room pixel.
@@ -69,7 +72,10 @@ impl ViewState {
 
     /// The node point a room pixel is drawn at.
     pub fn to_screen(&self, pos: (i32, i32)) -> (i32, i32) {
-        (pos.0 * self.zoom - self.scroller.offset.0, pos.1 * self.zoom - self.scroller.offset.1)
+        (
+            pos.0 * self.zoom - self.scroller.offset.0,
+            pos.1 * self.zoom - self.scroller.offset.1,
+        )
     }
 
     /// Sets the zoom, keeping the room pixel under `anchor` (a point of the
@@ -96,7 +102,10 @@ impl ViewState {
     /// Scrolls so that the room pixel `pos` is in the middle of the view.
     pub fn center_on(&mut self, pos: (i32, i32)) {
         let view = self.scroller.view();
-        self.scroller.offset = (pos.0 * self.zoom - view.width() / 2, pos.1 * self.zoom - view.height() / 2);
+        self.scroller.offset = (
+            pos.0 * self.zoom - view.width() / 2,
+            pos.1 * self.zoom - view.height() / 2,
+        );
         self.scroller.clamp();
     }
 }

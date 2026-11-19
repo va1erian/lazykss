@@ -60,7 +60,13 @@ pub struct ChunkCache {
 
 impl ChunkCache {
     pub fn new() -> Self {
-        Self { source: None, key: u64::MAX, zoom: 0, chunks: HashMap::new(), sprites: HashMap::new() }
+        Self {
+            source: None,
+            key: u64::MAX,
+            zoom: 0,
+            chunks: HashMap::new(),
+            sprites: HashMap::new(),
+        }
     }
 
     /// Replaces the source image; chunks are dropped.
@@ -71,7 +77,13 @@ impl ChunkCache {
     }
 
     /// The object's sprite scaled by `zoom`, built on first use.
-    pub fn sprite(&mut self, sprites: &ObjectSprites, id: u8, variant: u8, zoom: usize) -> Option<&Image> {
+    pub fn sprite(
+        &mut self,
+        sprites: &ObjectSprites,
+        id: u8,
+        variant: u8,
+        zoom: usize,
+    ) -> Option<&Image> {
         self.sprites
             .entry((id, variant, zoom))
             .or_insert_with(|| {

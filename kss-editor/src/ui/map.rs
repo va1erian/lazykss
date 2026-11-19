@@ -24,13 +24,32 @@ const WHEEL_STEP: i32 = 72;
 /// Input on the map, with positions already converted to the room.
 #[derive(Debug, Clone)]
 pub enum MapEvent {
-    Press { button: MouseButton, cell: (i32, i32), pos: (i32, i32), mods: Modifiers },
+    Press {
+        button: MouseButton,
+        cell: (i32, i32),
+        pos: (i32, i32),
+        mods: Modifiers,
+    },
     /// The pointer moved with a button held.
-    Drag { cell: (i32, i32), pos: (i32, i32), mods: Modifiers },
-    Release { button: MouseButton, cell: (i32, i32), pos: (i32, i32) },
-    Hover { cell: (i32, i32), pos: (i32, i32) },
+    Drag {
+        cell: (i32, i32),
+        pos: (i32, i32),
+        mods: Modifiers,
+    },
+    Release {
+        button: MouseButton,
+        cell: (i32, i32),
+        pos: (i32, i32),
+    },
+    Hover {
+        cell: (i32, i32),
+        pos: (i32, i32),
+    },
     Leave,
-    Key { key: Key, mods: Modifiers },
+    Key {
+        key: Key,
+        mods: Modifiers,
+    },
     /// Zoom or scroll changed; the status bar should follow.
     ViewChanged,
 }
@@ -50,8 +69,15 @@ pub struct MapView<M: 'static> {
 }
 
 impl<M: 'static> MapView<M> {
-    pub fn new(ui: &Ui<M>, editor: SharedEditor, wrap: impl Fn(MapEvent) -> M + 'static) -> Result<MapView<M>> {
-        let control = Control::new(ui, &NodeSpec::new(NodeKind::Custom, Rect::default()).tab_stop())?;
+    pub fn new(
+        ui: &Ui<M>,
+        editor: SharedEditor,
+        wrap: impl Fn(MapEvent) -> M + 'static,
+    ) -> Result<MapView<M>> {
+        let control = Control::new(
+            ui,
+            &NodeSpec::new(NodeKind::Custom, Rect::default()).tab_stop(),
+        )?;
         let state = Rc::new(RefCell::new(ViewState::new()));
         state.borrow_mut().scroller.dpi = ui.dpi();
         let cache = Rc::new(RefCell::new(ChunkCache::new()));
@@ -59,7 +85,13 @@ impl<M: 'static> MapView<M> {
         {
             let (state, theme) = (Rc::clone(&state), ui.theme_handle());
             control.set_painter(Rc::new(move |canvas| {
-                map_paint::paint(canvas, &editor.borrow(), &mut state.borrow_mut(), &mut cache.borrow_mut(), &theme.get());
+                map_paint::paint(
+                    canvas,
+                    &editor.borrow(),
+                    &mut state.borrow_mut(),
+                    &mut cache.borrow_mut(),
+                    &theme.get(),
+                );
             }));
         }
         let ctx = Context {
@@ -115,7 +147,7 @@ fn handle<M: 'static>(ctx: &Context<M>, event: &Event) -> Option<M> {
         let mut st = ctx.state.borrow_mut();
         process(ctx, &mut st, event)
     };
-    let Some(out) = out else { return None };
+    let out = out?;
     if out.focus {
         ctx.ui.focus(ctx.id);
     }
@@ -136,7 +168,18 @@ fn process<M: 'static>(ctx: &Context<M>, st: &mut ViewState, event: &Event) -> O
             st.scroller.clamp();
         }
         Event::SetFocus | Event::KillFocus => st.focused = matches!(event, Event::SetFocus),
-        Event::MouseDown { x, y, button, modifiers } | Event::MouseDoubleClick { x, y, button, modifiers } => {
+        Event::MouseDown {
+            x,
+            y,
+            button,
+            modifiers,
+        }
+        | Event::MouseDoubleClick {
+            x,
+            y,
+            button,
+            modifiers,
+        } => {
             out.focus = true;
             if st.scroller.press(x, y) {
                 out.capture = st.scroller.dragging().then_some(true);
@@ -147,11 +190,18 @@ fn process<M: 'static>(ctx: &Context<M>, st: &mut ViewState, event: &Event) -> O
                     st.pan = Some(((x, y), st.scroller.offset));
                     out.capture = Some(true);
                 }
-                MouseButton::Left | MouseButton::Right if st.scroller.view().contains(xui::geometry::Point::new(x, y)) => {
+                MouseButton::Left | MouseButton::Right
+                    if st.scroller.view().contains(xui::geometry::Point::new(x, y)) =>
+                {
                     let pos = st.to_room(x, y);
                     ctx.pressed.set(Some(button));
                     out.capture = Some(true);
-                    out.event = Some(MapEvent::Press { button, cell: ViewState::cell_of(pos), pos, mods: modifiers });
+                    out.event = Some(MapEvent::Press {
+                        button,
+                        cell: ViewState::cell_of(pos),
+                        pos,
+                        mods: modifiers,
+                    });
                 }
                 _ => return None,
             }
@@ -170,19 +220,28 @@ fn process<M: 'static>(ctx: &Context<M>, st: &mut ViewState, event: &Event) -> O
             st.hover = Some(pos);
             let cell = ViewState::cell_of(pos);
             out.event = Some(if ctx.pressed.get().is_some() {
-                MapEvent::Drag { cell, pos, mods: modifiers }
+                MapEvent::Drag {
+                    cell,
+                    pos,
+                    mods: modifiers,
+                }
             } else {
                 MapEvent::Hover { cell, pos }
             });
         }
         Event::MouseUp { x, y, button, .. } => {
-            if st.scroller.end_drag() || (button == MouseButton::Middle && st.pan.take().is_some()) {
+            if st.scroller.end_drag() || (button == MouseButton::Middle && st.pan.take().is_some())
+            {
                 out.capture = Some(false);
             } else if ctx.pressed.get() == Some(button) {
                 ctx.pressed.set(None);
                 out.capture = Some(false);
                 let pos = st.to_room(x, y);
-                out.event = Some(MapEvent::Release { button, cell: ViewState::cell_of(pos), pos });
+                out.event = Some(MapEvent::Release {
+                    button,
+                    cell: ViewState::cell_of(pos),
+                    pos,
+                });
             } else {
                 return None;
             }
@@ -198,7 +257,13 @@ fn process<M: 'static>(ctx: &Context<M>, st: &mut ViewState, event: &Event) -> O
             st.pan = None;
             ctx.pressed.set(None);
         }
-        Event::MouseWheel { delta, horizontal, x, y, modifiers } => {
+        Event::MouseWheel {
+            delta,
+            horizontal,
+            x,
+            y,
+            modifiers,
+        } => {
             let notches = f32::from(delta) / 120.0;
             if modifiers.ctrl && !horizontal {
                 let zoom = st.zoom + if notches > 0.0 { 1 } else { -1 };
@@ -220,8 +285,16 @@ fn process<M: 'static>(ctx: &Context<M>, st: &mut ViewState, event: &Event) -> O
             }
             out.event = Some(MapEvent::ViewChanged);
         }
-        Event::KeyDown { key, modifiers, system: false, .. } if !modifiers.ctrl => {
-            out.event = Some(MapEvent::Key { key, mods: modifiers });
+        Event::KeyDown {
+            key,
+            modifiers,
+            system: false,
+            ..
+        } if !modifiers.ctrl => {
+            out.event = Some(MapEvent::Key {
+                key,
+                mods: modifiers,
+            });
         }
         _ => return None,
     }

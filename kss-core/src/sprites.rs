@@ -43,25 +43,37 @@ impl ObjectSprites {
         let sources: Vec<Vec<u8>> = SOURCES
             .iter()
             .map(|&(offset, _)| {
-                compression::decompress(&rom.data()[offset as usize..]).map(|(data, _)| data).unwrap_or_default()
+                compression::decompress(&rom.data()[offset as usize..])
+                    .map(|(data, _)| data)
+                    .unwrap_or_default()
             })
             .collect();
-        let palettes: Vec<Option<[[u8; 4]; 16]>> = PALETTES.iter().map(|&c| colors(rom, &sources, c)).collect();
-        let sprites = OBJECTS.iter().map(|&(_, _, pieces)| render(&sources, &palettes, pieces)).collect();
+        let palettes: Vec<Option<[[u8; 4]; 16]>> =
+            PALETTES.iter().map(|&c| colors(rom, &sources, c)).collect();
+        let sprites = OBJECTS
+            .iter()
+            .map(|&(_, _, pieces)| render(&sources, &palettes, pieces))
+            .collect();
         Self { sprites }
     }
 
     /// The sprite of an object: the exact variant when it is known, else any
     /// variant of the same id.
     pub fn get(&self, id: u8, variant: u8) -> Option<&Sprite> {
-        let exact = OBJECTS.iter().position(|&(i, v, _)| i == id && v == variant);
+        let exact = OBJECTS
+            .iter()
+            .position(|&(i, v, _)| i == id && v == variant);
         let any = || OBJECTS.iter().position(|&(i, _, _)| i == id);
         self.sprites.get(exact.or_else(any)?)?.as_ref()
     }
 
     /// Ids and variants that have a sprite.
     pub fn known(&self) -> impl Iterator<Item = (u8, u8)> + '_ {
-        OBJECTS.iter().zip(&self.sprites).filter(|(_, s)| s.is_some()).map(|(&(id, variant, _), _)| (id, variant))
+        OBJECTS
+            .iter()
+            .zip(&self.sprites)
+            .filter(|(_, s)| s.is_some())
+            .map(|(&(id, variant, _), _)| (id, variant))
     }
 }
 
@@ -80,7 +92,11 @@ fn colors(rom: &Rom, sources: &[Vec<u8>], colors: Colors) -> Option<[[u8; 4]; 16
     Some(palette)
 }
 
-fn render(sources: &[Vec<u8>], palettes: &[Option<[[u8; 4]; 16]>], pieces: &[Piece]) -> Option<Sprite> {
+fn render(
+    sources: &[Vec<u8>],
+    palettes: &[Option<[[u8; 4]; 16]>],
+    pieces: &[Piece],
+) -> Option<Sprite> {
     let left = pieces.iter().map(|p| p.0).min()? as i32;
     let top = pieces.iter().map(|p| p.1).min()? as i32;
     let right = pieces.iter().map(|p| p.0).max()? as i32 + 8;
@@ -93,10 +109,18 @@ fn render(sources: &[Vec<u8>], palettes: &[Option<[[u8; 4]; 16]>], pieces: &[Pie
         let tile = sources[source as usize].get(start..start + 32)?;
         for y in 0..8usize {
             let row = if flip & 2 != 0 { 7 - y } else { y };
-            let planes = [tile[row * 2], tile[row * 2 + 1], tile[16 + row * 2], tile[17 + row * 2]];
+            let planes = [
+                tile[row * 2],
+                tile[row * 2 + 1],
+                tile[16 + row * 2],
+                tile[17 + row * 2],
+            ];
             for x in 0..8usize {
                 let shift = if flip & 1 != 0 { x } else { 7 - x };
-                let value = planes.iter().enumerate().fold(0, |acc, (bit, p)| acc | ((p >> shift) & 1) << bit);
+                let value = planes
+                    .iter()
+                    .enumerate()
+                    .fold(0, |acc, (bit, p)| acc | ((p >> shift) & 1) << bit);
                 if value != 0 {
                     let px = (dx as i32 - left) as usize + x;
                     let py = (dy as i32 - top) as usize + y;
@@ -106,7 +130,11 @@ fn render(sources: &[Vec<u8>], palettes: &[Option<[[u8; 4]; 16]>], pieces: &[Pie
             }
         }
     }
-    Some(Sprite { image, origin_x: -left, origin_y: -top })
+    Some(Sprite {
+        image,
+        origin_x: -left,
+        origin_y: -top,
+    })
 }
 
 #[cfg(test)]
@@ -115,7 +143,11 @@ mod tests {
 
     #[test]
     fn table_is_sorted_and_in_range() {
-        assert!(OBJECTS.windows(2).all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1)));
+        assert!(
+            OBJECTS
+                .windows(2)
+                .all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1))
+        );
         for &(_, _, pieces) in OBJECTS {
             assert!(!pieces.is_empty());
             for &(_, _, flip, source, _, palette) in pieces {
@@ -135,7 +167,12 @@ mod tests {
         // Waddle Dee: a 24x24 sprite standing on its position, orange body.
         let dee = sprites.get(0x01, 0x00).unwrap();
         assert_eq!((dee.image.width, dee.image.height), (24, 24));
-        let opaque = dee.image.rgba.chunks_exact(4).filter(|p| p[3] == 255).count();
+        let opaque = dee
+            .image
+            .rgba
+            .chunks_exact(4)
+            .filter(|p| p[3] == 255)
+            .count();
         assert!(opaque > 250, "{opaque} opaque pixels");
         // An unknown variant falls back to a known one; an unknown id has none.
         assert!(sprites.get(0x01, 0x77).is_some());

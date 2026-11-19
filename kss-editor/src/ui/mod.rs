@@ -52,6 +52,10 @@ pub fn new_shared() -> SharedEditor {
 /// Mounts the editor's layout in `ui` and opens the ROM (`rom`, else the
 /// usual lookup). `editor` is the shared model the views read; keep a clone
 /// of it to inspect the editor from outside (tests do).
-pub fn build_app(ui: &mut Ui<Msg>, rom: Option<PathBuf>, editor: SharedEditor) -> Result<EditorApp> {
+pub fn build_app(
+    ui: &mut Ui<Msg>,
+    rom: Option<PathBuf>,
+    editor: SharedEditor,
+) -> Result<EditorApp> {
     window::create(ui, rom, editor)
 }

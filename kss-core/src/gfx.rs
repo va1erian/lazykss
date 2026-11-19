@@ -23,8 +23,8 @@
 //! as in VRAM/CGRAM while the room runs.
 
 use crate::compression;
-use crate::room::{CELL, Room, Tables};
 use crate::rom::Rom;
+use crate::room::{CELL, Room, Tables};
 
 const CHARS: usize = 0x800;
 const BG_CHAR_BASE: usize = 0x280;
@@ -41,11 +41,19 @@ pub struct Image {
 
 impl Image {
     pub fn new(width: usize, height: usize) -> Self {
-        Self { width, height, rgba: vec![0; width * height * 4] }
+        Self {
+            width,
+            height,
+            rgba: vec![0; width * height * 4],
+        }
     }
 
     pub fn filled(width: usize, height: usize, color: [u8; 4]) -> Self {
-        Self { width, height, rgba: color.repeat(width * height) }
+        Self {
+            width,
+            height,
+            rgba: color.repeat(width * height),
+        }
     }
 
     pub fn pixel(&self, x: usize, y: usize) -> [u8; 4] {
@@ -70,7 +78,10 @@ pub struct Layers {
 
 impl Default for Layers {
     fn default() -> Self {
-        Self { background: true, foreground: true }
+        Self {
+            background: true,
+            foreground: true,
+        }
     }
 }
 
@@ -109,7 +120,9 @@ impl Tileset {
 
         let mut palette = [[0, 0, 0, 255]; 256];
         for index in [header[19], header[3], header[8]] {
-            let Some(at) = resource(index as usize) else { continue };
+            let Some(at) = resource(index as usize).filter(|&at| at + 2 <= rom.data().len()) else {
+                continue;
+            };
             let (count, first) = (rom.u8(at) as usize, rom.u8(at + 1) as usize);
             for i in 0..count {
                 if first + i < 256 && at + 4 + i * 2 <= rom.data().len() {
@@ -131,11 +144,18 @@ impl Tileset {
         let mut pixels = vec![0u8; CHARS * 64];
         for (tile, out) in chars.chunks_exact(32).zip(pixels.chunks_exact_mut(64)) {
             for y in 0..8 {
-                let rows = [tile[y * 2], tile[y * 2 + 1], tile[16 + y * 2], tile[17 + y * 2]];
+                let rows = [
+                    tile[y * 2],
+                    tile[y * 2 + 1],
+                    tile[16 + y * 2],
+                    tile[17 + y * 2],
+                ];
                 for x in 0..8 {
                     let shift = 7 - x;
-                    out[y * 8 + x] =
-                        rows.iter().enumerate().fold(0, |acc, (bit, row)| acc | ((row >> shift) & 1) << bit);
+                    out[y * 8 + x] = rows
+                        .iter()
+                        .enumerate()
+                        .fold(0, |acc, (bit, row)| acc | ((row >> shift) & 1) << bit);
                 }
             }
         }
@@ -153,17 +173,30 @@ impl Tileset {
         let attributes = table[PLANES * count * 2..PLANES * count * 2 + count].to_vec();
 
         let (mut bg_width, mut bg_height, mut bg_map) = (0, 0, Vec::new());
-        if let Some(at) = resource(header[10] as usize) {
+        if let Some(at) = resource(header[10] as usize).filter(|&at| at + 4 <= rom.data().len()) {
             let (w, h) = (rom.u16(at) as usize, rom.u16(at + 2) as usize);
-            if let Ok((data, _)) = compression::decompress(&rom.data()[at + 4..]) {
-                if w > 0 && h > 0 && data.len() >= w * h * 2 {
-                    bg_map = data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
-                    (bg_width, bg_height) = (w, h);
-                }
+            if let Ok((data, _)) = compression::decompress(&rom.data()[at + 4..])
+                && w > 0
+                && h > 0
+                && data.len() >= w * h * 2
+            {
+                bg_map = data
+                    .chunks_exact(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect();
+                (bg_width, bg_height) = (w, h);
             }
         }
 
-        Self { pixels, palette, planes, attributes, bg_width, bg_height, bg_map }
+        Self {
+            pixels,
+            palette,
+            planes,
+            attributes,
+            bg_width,
+            bg_height,
+            bg_map,
+        }
     }
 
     /// Loads the tileset `room` uses.
@@ -198,7 +231,9 @@ impl Tileset {
 
     /// True when every character of the metatile is fully transparent.
     pub fn is_blank(&self, metatile: u16) -> bool {
-        let Some(words) = self.words(metatile) else { return true };
+        let Some(words) = self.words(metatile) else {
+            return true;
+        };
         words.iter().all(|w| {
             let c = (w & 0x3FF) as usize;
             self.pixels[c * 64..c * 64 + 64].iter().all(|&p| p == 0)
@@ -236,9 +271,17 @@ impl Tileset {
 
     /// Draws a metatile with its top-left corner at `(x, y)`.
     pub fn draw_metatile(&self, image: &mut Image, x: isize, y: isize, metatile: u16) {
-        let Some(words) = self.words(metatile) else { return };
+        let Some(words) = self.words(metatile) else {
+            return;
+        };
         for (i, word) in words.into_iter().enumerate() {
-            self.draw_char(image, x + (i % 3 * 8) as isize, y + (i / 3 * 8) as isize, word, false);
+            self.draw_char(
+                image,
+                x + (i % 3 * 8) as isize,
+                y + (i / 3 * 8) as isize,
+                word,
+                false,
+            );
         }
     }
 
@@ -256,7 +299,10 @@ impl Tileset {
         let rows = self.metatile_count().div_ceil(columns);
         let mut image = Image::filled(columns * CELL, rows * CELL, fill);
         for id in 0..self.metatile_count() {
-            let (x, y) = ((id % columns * CELL) as isize, (id / columns * CELL) as isize);
+            let (x, y) = (
+                (id % columns * CELL) as isize,
+                (id / columns * CELL) as isize,
+            );
             self.draw_metatile(&mut image, x, y, id as u16);
         }
         image
@@ -285,7 +331,12 @@ impl Tileset {
         if layers.foreground {
             for y in 0..room.height {
                 for x in 0..room.width {
-                    self.draw_metatile(&mut image, (x * CELL) as isize, (y * CELL) as isize, room.tile(x, y));
+                    self.draw_metatile(
+                        &mut image,
+                        (x * CELL) as isize,
+                        (y * CELL) as isize,
+                        room.tile(x, y),
+                    );
                 }
             }
         }
@@ -315,7 +366,9 @@ mod tests {
         // Ground top: two blank rows of characters, then the grass edge.
         assert_eq!(
             tiles.words(0x00A).unwrap(),
-            [0x1000, 0x1000, 0x1000, 0x1000, 0x1000, 0x1000, 0x103A, 0x103A, 0x103A]
+            [
+                0x1000, 0x1000, 0x1000, 0x1000, 0x1000, 0x1000, 0x103A, 0x103A, 0x103A
+            ]
         );
         assert_eq!(tiles.attribute(0x00C), 0x50);
         assert!(tiles.is_blank(0));

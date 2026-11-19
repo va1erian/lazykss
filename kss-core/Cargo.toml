@@ -2,7 +2,11 @@
 name = "kss-core"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 description = "Kirby Super Star (USA) ROM parsing, rendering and patching — no UI dependencies"
+
+[lints]
+workspace = true
 
 [dependencies]
 

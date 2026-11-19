@@ -2,6 +2,7 @@
 name = "kss-editor"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 description = "Level editor GUI for Kirby Super Star (USA), built on xui"
 
 [lib]
@@ -11,6 +12,9 @@ path = "src/lib.rs"
 [[bin]]
 name = "kss-editor"
 path = "src/main.rs"
+
+[lints]
+workspace = true
 
 [dependencies]
 kss-core = { path = "../kss-core" }

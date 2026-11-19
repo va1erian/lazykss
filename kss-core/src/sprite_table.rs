@@ -49,30 +49,102 @@ pub(super) enum Colors {
 }
 
 pub(super) const PALETTES: &[Colors] = &[
-    Colors::Package { source: 0, index: 0 },
-    Colors::Package { source: 1, index: 0 },
-    Colors::Package { source: 2, index: 0 },
-    Colors::Package { source: 3, index: 0 },
-    Colors::Package { source: 4, index: 0 },
-    Colors::Package { source: 5, index: 0 },
-    Colors::Package { source: 6, index: 0 },
-    Colors::Package { source: 7, index: 0 },
-    Colors::Package { source: 8, index: 0 },
-    Colors::Package { source: 9, index: 0 },
-    Colors::Package { source: 10, index: 0 },
-    Colors::Package { source: 11, index: 0 },
-    Colors::Package { source: 12, index: 0 },
-    Colors::Package { source: 13, index: 0 },
-    Colors::Package { source: 14, index: 0 },
-    Colors::Package { source: 15, index: 0 },
-    Colors::Package { source: 16, index: 0 },
-    Colors::Package { source: 17, index: 0 },
-    Colors::Package { source: 18, index: 0 },
-    Colors::Package { source: 19, index: 0 },
-    Colors::Package { source: 20, index: 0 },
-    Colors::Package { source: 21, index: 0 },
-    Colors::Package { source: 22, index: 0 },
-    Colors::Package { source: 23, index: 0 },
+    Colors::Package {
+        source: 0,
+        index: 0,
+    },
+    Colors::Package {
+        source: 1,
+        index: 0,
+    },
+    Colors::Package {
+        source: 2,
+        index: 0,
+    },
+    Colors::Package {
+        source: 3,
+        index: 0,
+    },
+    Colors::Package {
+        source: 4,
+        index: 0,
+    },
+    Colors::Package {
+        source: 5,
+        index: 0,
+    },
+    Colors::Package {
+        source: 6,
+        index: 0,
+    },
+    Colors::Package {
+        source: 7,
+        index: 0,
+    },
+    Colors::Package {
+        source: 8,
+        index: 0,
+    },
+    Colors::Package {
+        source: 9,
+        index: 0,
+    },
+    Colors::Package {
+        source: 10,
+        index: 0,
+    },
+    Colors::Package {
+        source: 11,
+        index: 0,
+    },
+    Colors::Package {
+        source: 12,
+        index: 0,
+    },
+    Colors::Package {
+        source: 13,
+        index: 0,
+    },
+    Colors::Package {
+        source: 14,
+        index: 0,
+    },
+    Colors::Package {
+        source: 15,
+        index: 0,
+    },
+    Colors::Package {
+        source: 16,
+        index: 0,
+    },
+    Colors::Package {
+        source: 17,
+        index: 0,
+    },
+    Colors::Package {
+        source: 18,
+        index: 0,
+    },
+    Colors::Package {
+        source: 19,
+        index: 0,
+    },
+    Colors::Package {
+        source: 20,
+        index: 0,
+    },
+    Colors::Package {
+        source: 21,
+        index: 0,
+    },
+    Colors::Package {
+        source: 22,
+        index: 0,
+    },
+    Colors::Package {
+        source: 23,
+        index: 0,
+    },
     Colors::Raw(0x0467D8),
     Colors::Raw(0x0EF0E0),
 ];
@@ -83,6 +155,7 @@ pub(super) type Piece = (i16, i16, u8, u8, u16, u8);
 
 /// `(object id, variant, pieces)`, front piece first, sorted by id then
 /// variant.
+#[rustfmt::skip]
 pub(super) const OBJECTS: &[(u8, u8, &[Piece])] = &[
     (0x01, 0x00, &[
         (4, 4, 1, 2, 55, 2), (-12, 4, 1, 2, 41, 2), (-4, 4, 1, 2, 40, 2), (4, -4, 1, 2, 62, 2),

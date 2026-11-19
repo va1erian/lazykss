@@ -51,11 +51,18 @@ impl EditorApp {
             self.tree_rows = rows;
         }
         self.tree_nodes = nodes;
-        tree.select(self.tree_nodes.iter().position(|n| *n == Node::Room(current)));
+        tree.select(
+            self.tree_nodes
+                .iter()
+                .position(|n| *n == Node::Room(current)),
+        );
     }
 
     pub(super) fn refresh_tree_if_dirty_changed(&mut self) {
-        if self.ed(|e| e.dirty_rooms()).is_some_and(|d| d != self.dirty_seen) {
+        if self
+            .ed(|e| e.dirty_rooms())
+            .is_some_and(|d| d != self.dirty_seen)
+        {
             self.refresh_tree();
         }
     }
@@ -63,14 +70,18 @@ impl EditorApp {
     // ---- toolbar ----
 
     pub(super) fn refresh_toolbar(&self) {
-        let Some(tool) = self.ed(|e| e.tool) else { return };
+        let Some(tool) = self.ed(|e| e.tool) else {
+            return;
+        };
         for (t, handle) in &self.h.tools {
             handle.get().set_checked(*t == tool);
         }
     }
 
     pub(super) fn refresh_history_buttons(&self) {
-        let (undo, redo) = self.ed(|e| (e.can_undo(), e.can_redo())).unwrap_or((false, false));
+        let (undo, redo) = self
+            .ed(|e| (e.can_undo(), e.can_redo()))
+            .unwrap_or((false, false));
         self.h.undo.get().set_enabled(undo);
         self.h.redo.get().set_enabled(redo);
     }
@@ -78,8 +89,13 @@ impl EditorApp {
     // ---- tiles ----
 
     pub(super) fn refresh_tile(&self) {
-        let Some((tile, attr)) = self.ed(|e| (e.tile, e.tileset().attribute(e.tile))) else { return };
-        self.h.tile_info.get().set_text(&format!("Tile 0x{tile:03X}   attribute 0x{attr:02X}"));
+        let Some((tile, attr)) = self.ed(|e| (e.tile, e.tileset().attribute(e.tile))) else {
+            return;
+        };
+        self.h
+            .tile_info
+            .get()
+            .set_text(&format!("Tile 0x{tile:03X}   attribute 0x{attr:02X}"));
         let picker = self.h.picker.get();
         picker.reveal(tile);
         picker.invalidate();
@@ -121,8 +137,15 @@ impl EditorApp {
     }
 
     pub(super) fn refresh_object_fields(&self) {
-        let object = self.ed(|e| e.selected_object.and_then(|i| e.room().objects.get(i).copied())).flatten();
-        let values = object.map_or([0.0; 4], |o| [o.id as f64, o.variant as f64, o.x as f64, o.y as f64]);
+        let object = self
+            .ed(|e| {
+                e.selected_object
+                    .and_then(|i| e.room().objects.get(i).copied())
+            })
+            .flatten();
+        let values = object.map_or([0.0; 4], |o| {
+            [o.id as f64, o.variant as f64, o.x as f64, o.y as f64]
+        });
         for (field, value) in self.h.object_fields.iter().zip(values) {
             let field = field.get();
             field.set_value(value);
@@ -148,7 +171,11 @@ impl EditorApp {
                     vec![
                         i.to_string(),
                         d.dest_room.to_string(),
-                        if d.has_trigger() { format!("{}, {}", d.x, d.y) } else { "none".to_string() },
+                        if d.has_trigger() {
+                            format!("{}, {}", d.x, d.y)
+                        } else {
+                            "none".to_string()
+                        },
                         format!("{}, {}", d.dest_x, d.dest_y),
                     ]
                 })
@@ -164,9 +191,25 @@ impl EditorApp {
     }
 
     pub(super) fn refresh_door_fields(&self) {
-        let info = self.ed(|e| (e.selected_door.and_then(|i| e.room().doors().get(i).copied()), e.room_count())).unwrap_or((None, 0));
+        let info = self
+            .ed(|e| {
+                (
+                    e.selected_door
+                        .and_then(|i| e.room().doors().get(i).copied()),
+                    e.room_count(),
+                )
+            })
+            .unwrap_or((None, 0));
         let (door, count) = info;
-        let values = door.map_or([0.0; 5], |d| [d.dest_room as f64, d.x as f64, d.y as f64, d.dest_x as f64, d.dest_y as f64]);
+        let values = door.map_or([0.0; 5], |d| {
+            [
+                d.dest_room as f64,
+                d.x as f64,
+                d.y as f64,
+                d.dest_x as f64,
+                d.dest_y as f64,
+            ]
+        });
         for (field, value) in self.h.door_fields.iter().zip(values) {
             let field = field.get();
             field.set_value(value);
@@ -175,9 +218,14 @@ impl EditorApp {
         let note = match door {
             None => "Select a door in the list or on the map.".to_string(),
             Some(d) if d.dest_room as usize >= count => {
-                format!("Warning: room {} does not exist (the ROM has {count} rooms).", d.dest_room)
+                format!(
+                    "Warning: room {} does not exist (the ROM has {count} rooms).",
+                    d.dest_room
+                )
             }
-            Some(d) if !d.has_trigger() => "No trigger in this room: a warp or room exit.".to_string(),
+            Some(d) if !d.has_trigger() => {
+                "No trigger in this room: a warp or room exit.".to_string()
+            }
             Some(_) => String::new(),
         };
         self.h.door_note.get().set_text(&note);
@@ -193,7 +241,10 @@ impl EditorApp {
             return;
         };
         self.h.music.get().set_value(music as f64);
-        self.h.music_name.get().set_text(song_name(music).unwrap_or("(unnamed song)"));
+        self.h
+            .music_name
+            .get()
+            .set_text(song_name(music).unwrap_or("(unnamed song)"));
         self.size = (width, height);
         self.h.size_fields[0].get().set_value(width as f64);
         self.h.size_fields[1].get().set_value(height as f64);
@@ -221,25 +272,52 @@ impl EditorApp {
                 .find(|l| l.rooms.contains(&e.current_index()))
                 .map(|l| l.name.clone())
                 .unwrap_or_default();
-            let hovered = self.cursor.and_then(|(cell, _)| e.tile_at(cell.0, cell.1).map(|t| (cell, t)));
-            (e.current_index(), level, (e.room().width, e.room().height), e.tile, hovered, e.tool, e.room().objects.len())
+            let hovered = self
+                .cursor
+                .and_then(|(cell, _)| e.tile_at(cell.0, cell.1).map(|t| (cell, t)));
+            (
+                e.current_index(),
+                level,
+                (e.room().width, e.room().height),
+                e.tile,
+                hovered,
+                e.tool,
+                e.room().objects.len(),
+            )
         }) else {
             info.set_text(0, "No ROM loaded");
             info.set_text(1, "");
             info.set_text(2, "");
             return;
         };
-        let level = if level.is_empty() { String::new() } else { format!(" ({level})") };
-        info.set_text(0, &format!("Room {room}{level}  {}x{}  {objects} objects", dims.0, dims.1));
+        let level = if level.is_empty() {
+            String::new()
+        } else {
+            format!(" ({level})")
+        };
+        info.set_text(
+            0,
+            &format!(
+                "Room {room}{level}  {}x{}  {objects} objects",
+                dims.0, dims.1
+            ),
+        );
         let cursor = match (self.cursor, hovered) {
             (Some((_, pos)), Some((cell, t))) => {
-                format!("cell ({}, {})  px ({}, {})  tile 0x{t:03X}", cell.0, cell.1, pos.0, pos.1)
+                format!(
+                    "cell ({}, {})  px ({}, {})  tile 0x{t:03X}",
+                    cell.0, cell.1, pos.0, pos.1
+                )
             }
             (Some((_, pos)), None) => format!("outside room  px ({}, {})", pos.0, pos.1),
             _ => String::from("cell -"),
         };
         info.set_text(1, &cursor);
-        let tool = if tool == Tool::Select { String::new() } else { format!("  {}", tool.label()) };
+        let tool = if tool == Tool::Select {
+            String::new()
+        } else {
+            format!("  {}", tool.label())
+        };
         info.set_text(2, &format!("Zoom {}x  tile 0x{tile:03X}{tool}", view.zoom));
         self.h.zoom_label.get().set_text(&format!("{}x", view.zoom));
     }

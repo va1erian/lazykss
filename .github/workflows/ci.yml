@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same PR/branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The jobs only read the repository.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # No incremental artifacts in CI, and no debuginfo: it dominates link time
+  # and target size on Windows.
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+# The ROM is not in the repository and never will be. Every test that needs it
+# returns early when it is absent, so CI covers the codec, the table shapes,
+# the editing logic that needs no room data, and the UI's empty state. The
+# ROM-backed tests run on a developer's machine (see agent.md).
+jobs:
+  # Clippy is a superset of `cargo check`. Windows, because that is where the
+  # Direct2D backend is compiled.
+  lint:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows runs on Direct2D, Linux on xui's software backend.
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test
+      # The window, rendered headlessly in its empty state: the layout report
+      # must have no clipped, overlapping or truncated node.
+      - name: Headless snapshot and layout report
+        shell: bash
+        run: |
+          XUI_LAYOUT_REPORT=1 XUI_SNAPSHOT=target/shots cargo run -p kss-editor | tee layout.txt
+          grep -qx 'XUI_LAYOUT_WARNINGS:0' layout.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snapshot-${{ matrix.os }}
+          path: target/shots/
+          if-no-files-found: warn
+
+  # A ROM must never be committed: fail if a tracked file looks like one.
+  no-rom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No ROM images or large binaries in the tree
+        run: |
+          bad=$(git ls-files | grep -iE '\.(sfc|smc|fig|swc|bs|srm|state)$' || true)
+          big=$(git ls-files -z | xargs -0 -r stat -c '%s %n' | awk '$1 > 1048576 { print }')
+          if [ -n "$bad$big" ]; then
+            echo "Files that must not be committed:"; echo "$bad"; echo "$big"
+            exit 1
+          fi

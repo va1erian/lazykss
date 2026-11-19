@@ -25,8 +25,9 @@ cargo run -p kss-editor [rom.sfc]
 Without an argument the ROM is found through `KSS_ROM`, or as
 `Kirby Super Star (USA).sfc` in the current directory or any parent. The ROM
 is not part of the repository. Save never writes over the file that was
-opened: it writes `<name> (edited).sfc` next to it unless Save As picks
-another path.
+opened, nor over a file from an earlier session: it writes
+`<name> (edited).sfc` next to the ROM (`(edited 2)`, ... when that exists)
+unless Save As picks another path.
 
 ## Rules for agents
 
@@ -36,7 +37,8 @@ another path.
 2. Check UI changes headlessly: `XUI_LAYOUT_REPORT=1 XUI_SNAPSHOT=target/shots
    cargo run -p kss-editor` writes light and dark PNGs and must report
    `XUI_LAYOUT_WARNINGS:0`. Look at the PNGs.
-3. Do not hand-edit `kss-core/src/sprite_table.rs`; it is generated from
-   emulator captures (documentation §6).
+3. `kss-core/src/sprite_table.rs` was generated from emulator captures
+   (documentation §6) by a harness that is not in this repository. Extend it
+   the same way rather than by guessing addresses.
 4. A change to the save pipeline is not done until a saved ROM has been
    booted in an SA-1-accurate emulator.

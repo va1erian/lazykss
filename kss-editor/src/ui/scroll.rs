@@ -31,7 +31,13 @@ pub struct Scroller {
 
 impl Scroller {
     pub fn new() -> Self {
-        Self { size: (0, 0), content: (0, 0), offset: (0, 0), dpi: 96, drag: None }
+        Self {
+            size: (0, 0),
+            content: (0, 0),
+            offset: (0, 0),
+            dpi: 96,
+            drag: None,
+        }
     }
 
     fn thickness(&self) -> i32 {
@@ -51,12 +57,20 @@ impl Scroller {
     pub fn view(&self) -> Rect {
         let (v, h) = self.bars();
         let t = self.thickness();
-        Rect::new(0, 0, self.size.0 - if v { t } else { 0 }, self.size.1 - if h { t } else { 0 })
+        Rect::new(
+            0,
+            0,
+            self.size.0 - if v { t } else { 0 },
+            self.size.1 - if h { t } else { 0 },
+        )
     }
 
     pub fn max_offset(&self) -> (i32, i32) {
         let view = self.view();
-        ((self.content.0 - view.width()).max(0), (self.content.1 - view.height()).max(0))
+        (
+            (self.content.0 - view.width()).max(0),
+            (self.content.1 - view.height()).max(0),
+        )
     }
 
     pub fn clamp(&mut self) {
@@ -82,33 +96,65 @@ impl Scroller {
     }
 
     fn v_scroll(&self) -> Scroll {
-        Scroll { viewport: self.view().height(), content: self.content.1, offset: self.offset.1 }
+        Scroll {
+            viewport: self.view().height(),
+            content: self.content.1,
+            offset: self.offset.1,
+        }
     }
 
     fn h_scroll(&self) -> Scroll {
-        Scroll { viewport: self.view().width(), content: self.content.0, offset: self.offset.0 }
+        Scroll {
+            viewport: self.view().width(),
+            content: self.content.0,
+            offset: self.offset.0,
+        }
     }
 
     /// Whether a press at `(x, y)` lands on a bar; if so it is handled
     /// (page or start of a thumb drag) and the caller should capture the
     /// pointer while [`dragging`](Self::dragging).
     pub fn press(&mut self, x: i32, y: i32) -> bool {
-        if let Some(track) = self.v_track().filter(|t| t.contains(xui::geometry::Point::new(x, y))) {
+        if let Some(track) = self
+            .v_track()
+            .filter(|t| t.contains(xui::geometry::Point::new(x, y)))
+        {
             let scroll = self.v_scroll();
             match scrollbar::hit(track, scroll, Orientation::Vertical, y, self.dpi) {
-                Some(TrackHit::Thumb) => self.drag = Some(Drag::Vertical { start: y, offset: self.offset.1 }),
-                Some(TrackHit::Before) => self.offset.1 = scrollbar::paged_offset(scroll, -1, scroll.viewport),
-                Some(TrackHit::After) => self.offset.1 = scrollbar::paged_offset(scroll, 1, scroll.viewport),
+                Some(TrackHit::Thumb) => {
+                    self.drag = Some(Drag::Vertical {
+                        start: y,
+                        offset: self.offset.1,
+                    })
+                }
+                Some(TrackHit::Before) => {
+                    self.offset.1 = scrollbar::paged_offset(scroll, -1, scroll.viewport)
+                }
+                Some(TrackHit::After) => {
+                    self.offset.1 = scrollbar::paged_offset(scroll, 1, scroll.viewport)
+                }
                 None => {}
             }
             return true;
         }
-        if let Some(track) = self.h_track().filter(|t| t.contains(xui::geometry::Point::new(x, y))) {
+        if let Some(track) = self
+            .h_track()
+            .filter(|t| t.contains(xui::geometry::Point::new(x, y)))
+        {
             let scroll = self.h_scroll();
             match scrollbar::hit(track, scroll, Orientation::Horizontal, x, self.dpi) {
-                Some(TrackHit::Thumb) => self.drag = Some(Drag::Horizontal { start: x, offset: self.offset.0 }),
-                Some(TrackHit::Before) => self.offset.0 = scrollbar::paged_offset(scroll, -1, scroll.viewport),
-                Some(TrackHit::After) => self.offset.0 = scrollbar::paged_offset(scroll, 1, scroll.viewport),
+                Some(TrackHit::Thumb) => {
+                    self.drag = Some(Drag::Horizontal {
+                        start: x,
+                        offset: self.offset.0,
+                    })
+                }
+                Some(TrackHit::Before) => {
+                    self.offset.0 = scrollbar::paged_offset(scroll, -1, scroll.viewport)
+                }
+                Some(TrackHit::After) => {
+                    self.offset.0 = scrollbar::paged_offset(scroll, 1, scroll.viewport)
+                }
                 None => {}
             }
             return true;
@@ -161,14 +207,30 @@ impl Scroller {
 
     pub fn paint(&self, canvas: &mut dyn Canvas, theme: &Theme) {
         let state = |vertical: bool| match (self.drag, vertical) {
-            (Some(Drag::Vertical { .. }), true) | (Some(Drag::Horizontal { .. }), false) => ThumbState::Pressed,
+            (Some(Drag::Vertical { .. }), true) | (Some(Drag::Horizontal { .. }), false) => {
+                ThumbState::Pressed
+            }
             _ => ThumbState::Normal,
         };
         if let Some(track) = self.v_track() {
-            scrollbar::paint_state(canvas, track, self.v_scroll(), Orientation::Vertical, *theme, state(true));
+            scrollbar::paint_state(
+                canvas,
+                track,
+                self.v_scroll(),
+                Orientation::Vertical,
+                *theme,
+                state(true),
+            );
         }
         if let Some(track) = self.h_track() {
-            scrollbar::paint_state(canvas, track, self.h_scroll(), Orientation::Horizontal, *theme, state(false));
+            scrollbar::paint_state(
+                canvas,
+                track,
+                self.h_scroll(),
+                Orientation::Horizontal,
+                *theme,
+                state(false),
+            );
         }
     }
 }

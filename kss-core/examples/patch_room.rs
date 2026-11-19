@@ -29,7 +29,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while at < args.len() {
         match args[at].as_str() {
             "tile" => {
-                let (x, y, id) = (number(&args[at + 1])?, number(&args[at + 2])?, number(&args[at + 3])?);
+                let (x, y, id) = (
+                    number(&args[at + 1])?,
+                    number(&args[at + 2])?,
+                    number(&args[at + 3])?,
+                );
                 room.set_tile(x, y, id as u16);
                 at += 4;
             }
