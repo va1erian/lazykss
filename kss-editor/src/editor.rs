@@ -104,6 +104,9 @@ impl SaveSummary {
 pub struct Editor {
     rom: Rom,
     tables: Tables,
+    /// Distinguishes this editor from one opened earlier in the process,
+    /// for caches keyed by room.
+    session: u64,
     /// Object sprites decoded from the ROM, for the map.
     sprites: ObjectSprites,
     source: PathBuf,
@@ -173,6 +176,8 @@ pub fn default_edited_path(source: &Path) -> PathBuf {
     }
 }
 
+static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl Editor {
     /// Loads the ROM at `path` and opens room 1 (or room 0).
     pub fn open(path: &Path) -> Result<Editor, String> {
@@ -189,6 +194,7 @@ impl Editor {
         let mut editor = Editor {
             rom,
             tables,
+            session: NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             sprites,
             source,
             save_path: None,
@@ -295,6 +301,13 @@ impl Editor {
 
     pub fn room(&self) -> &Room {
         &self.cur().room
+    }
+
+    /// A number no other [`Editor`] of this process has: a view that caches
+    /// what it drew for a room must also key it by this, or it shows the
+    /// previous ROM's room after another ROM is opened.
+    pub fn session(&self) -> u64 {
+        self.session
     }
 
     pub fn sprites(&self) -> &ObjectSprites {
@@ -1066,5 +1079,17 @@ mod tests {
         e.selected_object = Some(0);
         assert!(e.undo());
         assert_eq!(e.selected_object, None);
+    }
+
+    #[test]
+    fn each_opened_rom_has_its_own_session() {
+        let (Some(a), Some(b)) = (editor(), editor()) else {
+            return;
+        };
+        assert_ne!(a.session(), b.session());
+        assert_eq!(
+            (a.current_index(), a.revision()),
+            (b.current_index(), b.revision())
+        );
     }
 }

@@ -19,6 +19,8 @@ pub struct RoomImages {
     room: Option<Image>,
     /// Identifies what `room` was rendered from.
     pub key: u64,
+    /// The opened ROM the sprites below were decoded from.
+    session: u64,
     /// Object sprites by `(id, variant)`, converted on first use.
     sprites: HashMap<(u8, u8), Option<Image>>,
 }
@@ -28,7 +30,16 @@ impl RoomImages {
         Self {
             room: None,
             key: u64::MAX,
+            session: u64::MAX,
             sprites: HashMap::new(),
+        }
+    }
+
+    /// Another ROM was opened: its sprites replace the cached ones.
+    pub fn set_session(&mut self, session: u64) {
+        if self.session != session {
+            self.session = session;
+            self.sprites.clear();
         }
     }
 

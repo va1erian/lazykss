@@ -15,7 +15,7 @@ use xui::{Dip, Theme};
 
 /// Where the map view sits in the 1380x860 window (see the layout report)
 /// and its scroll/zoom at start.
-const MAP: (i32, i32) = (262, 74);
+const MAP: (i32, i32) = (262, 78);
 const ZOOM: i32 = 2;
 /// Tab header positions of the side panel.
 const TAB_OBJECTS: (i32, i32) = (1106, 88);

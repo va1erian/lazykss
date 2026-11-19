@@ -53,9 +53,14 @@ pub fn paint(
     canvas.restore();
 }
 
+/// What the cached room image was rendered from: the opened ROM, the room,
+/// its edit revision and the layers shown.
 fn cache_key(editor: &Editor, view: &ViewState) -> u64 {
     let layers = view.layers.background as u64 | (view.layers.foreground as u64) << 1;
-    (editor.current_index() as u64) << 48 | (editor.revision() & 0xFFFF_FFFF) << 2 | layers
+    (editor.session() & 0xFFF) << 52
+        | (editor.current_index() as u64 & 0xFFF) << 40
+        | (editor.revision() & 0x3F_FFFF_FFFF) << 2
+        | layers
 }
 
 fn paint_room(
@@ -68,6 +73,7 @@ fn paint_room(
     let room = editor.room();
     view.set_room(room.width, room.height);
 
+    cache.set_session(editor.session());
     let key = cache_key(editor, view);
     if cache.key != key {
         cache.set_room(key, &editor.tileset().render_room(room, view.layers));
