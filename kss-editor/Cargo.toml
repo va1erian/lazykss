@@ -15,3 +15,7 @@ path = "src/main.rs"
 [dependencies]
 kss-core = { path = "../kss-core" }
 xui = { git = "https://github.com/va1erian/xui" }
+
+# Windows draws with Direct2D; other platforms use xui's software backend.
+[target.'cfg(windows)'.dependencies]
+xui-d2d = { git = "https://github.com/va1erian/xui" }

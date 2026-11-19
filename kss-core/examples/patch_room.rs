@@ -2,14 +2,14 @@
 //!
 //! ```text
 //! patch_room <out.sfc> <room> [tile X Y ID]... [object ID VARIANT X Y]...
-//!            [clear-objects] [slots HEX8] [raw OFFSET HEX] [noise]
+//!            [block X Y AFTER EXTRA]... [clear-objects] [slots HEX8] [raw OFFSET HEX] [noise]
 //! ```
 //!
 //! `slots` replaces the four object-graphics slot bytes of the graphics
 //! header; `noise` fills the unused right part of the map with
 //! incompressible tiles so the room has to move to free space.
 
-use kss_core::{Object, Rom, Room, Tables};
+use kss_core::{Block, Object, Rom, Room, Tables};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -40,6 +40,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     x: number(&args[at + 3])? as u16,
                     y: number(&args[at + 4])? as u16,
                 });
+                at += 5;
+            }
+            "block" => {
+                // block X Y AFTER EXTRA: make the cell breakable.
+                let mut blocks = room.blocks();
+                blocks.push(Block {
+                    x: number(&args[at + 1])?,
+                    y: number(&args[at + 2])?,
+                    after: number(&args[at + 3])? as u16,
+                    extra: number(&args[at + 4])? as u16,
+                });
+                room.set_blocks(&blocks);
                 at += 5;
             }
             "clear-objects" => {

@@ -50,6 +50,8 @@ impl Tool {
 pub struct LoadedRoom {
     pub room: Room,
     pub tileset: Tileset,
+    /// The tiles as loaded or last saved: what the block list was built for.
+    saved_tiles: Vec<u16>,
     /// Bumped whenever the room image changes, to invalidate renders.
     pub revision: u64,
     pub undo: Vec<Entry>,
@@ -214,7 +216,7 @@ impl Editor {
         let tileset = Tileset::for_room(&self.rom, &self.tables, &room);
         self.rooms.insert(
             index,
-            LoadedRoom { room, tileset, revision: 0, undo: Vec::new(), redo: Vec::new(), dirty: false },
+            LoadedRoom { saved_tiles: room.tiles.clone(), room, tileset, revision: 0, undo: Vec::new(), redo: Vec::new(), dirty: false },
         );
         Ok(())
     }
@@ -600,7 +602,11 @@ impl Editor {
         let dirty = self.dirty_rooms();
         for index in dirty {
             let lr = self.rooms.get_mut(&index).expect("dirty rooms are loaded");
+            // Star and bomb blocks only break when the room lists their cell.
+            let LoadedRoom { room, tileset, saved_tiles, .. } = lr;
+            room.sync_blocks(|tile| tileset.is_breakable(tile), saved_tiles);
             let report = lr.room.save(&mut self.rom, &mut self.tables).map_err(|e| format!("room {index}: {e}"))?;
+            lr.saved_tiles = lr.room.tiles.clone();
             lr.dirty = false;
             written.push((index, report));
         }

@@ -12,6 +12,7 @@
 //! +58            six sections, each starting with a 16-bit pointer relative
 //!                to itself that leads to the next one. Section 0 holds the
 //!                door list: 10-byte records up to an FFFF terminator.
+//!                Section 3 lists the breakable cells (`Block`).
 //! then  2 bytes  3DEF in every room
 //!       2 bytes  width in metatiles
 //!       2 bytes  height in metatiles
@@ -34,6 +35,8 @@ const SECTIONS_OFFSET: usize = 58;
 const SECTION_COUNT: usize = 6;
 const MISC_MUSIC: usize = 2;
 const DOOR_SIZE: usize = 10;
+/// The section that lists breakable cells.
+const BLOCK_SECTION: usize = 3;
 /// Free runs shorter than this are not worth tracking.
 const MIN_FREE_RUN: usize = 0x200;
 /// Bytes skipped at the start of a run of `FF`: the first ones can be the
@@ -82,6 +85,21 @@ pub struct Object {
     pub x: u16,
     /// Pixels from the room's top edge.
     pub y: u16,
+}
+
+/// A breakable cell: a record of section 3. A star, bomb or similar block
+/// only reacts when its cell is listed here; without a record the metatile
+/// is scenery Kirby walks through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Block {
+    pub x: usize,
+    pub y: usize,
+    /// Metatile the cell turns into when the block breaks.
+    pub after: u16,
+    /// Third word of the record. In the original rooms it is the id of the
+    /// cap metatile drawn in the cell above the block, and 0 for the cap's
+    /// own record; what the game does with it is not established.
+    pub extra: u16,
 }
 
 /// A door record of section 0.
@@ -233,6 +251,104 @@ impl Room {
             .take_while(|&at| !(self.head[at] == 0xFF && self.head[at + 1] == 0xFF))
     }
 
+    /// Start of section `index` in `head` and the offset just past it.
+    fn section_range(&self, index: usize) -> (usize, usize) {
+        let mut start = SECTIONS_OFFSET;
+        for _ in 0..index {
+            start += u16::from_le_bytes([self.head[start], self.head[start + 1]]) as usize;
+        }
+        (start, start + u16::from_le_bytes([self.head[start], self.head[start + 1]]) as usize)
+    }
+
+    /// The payload of section `index` (0-5), terminator included.
+    pub fn section(&self, index: usize) -> &[u8] {
+        let (start, end) = self.section_range(index.min(SECTION_COUNT - 1));
+        &self.head[start + 2..end]
+    }
+
+    /// Replaces the payload of section `index`; the sections after it move.
+    fn set_section(&mut self, index: usize, payload: &[u8]) {
+        let (start, end) = self.section_range(index);
+        let len = (payload.len() + 2) as u16;
+        let mut section = len.to_le_bytes().to_vec();
+        section.extend_from_slice(payload);
+        let grown = section.len() as isize - (end - start) as isize;
+        self.head.splice(start..end, section);
+        self.size_at = (self.size_at as isize + grown) as usize;
+        if index == 0 {
+            self.doors_end = (self.doors_end as isize + grown) as usize;
+        }
+    }
+
+    /// The breakable cells of the room.
+    pub fn blocks(&self) -> Vec<Block> {
+        self.section(BLOCK_SECTION)
+            .chunks_exact(6)
+            .take_while(|r| !(r[0] == 0xFF && r[1] == 0xFF))
+            .map(|r| {
+                let cell = u16::from_le_bytes([r[0], r[1]]) as usize / 2;
+                Block {
+                    x: cell % self.width.max(1),
+                    y: cell / self.width.max(1),
+                    after: u16::from_le_bytes([r[2], r[3]]),
+                    extra: u16::from_le_bytes([r[4], r[5]]),
+                }
+            })
+            .collect()
+    }
+
+    /// Replaces the list of breakable cells. Records are stored in map
+    /// order, as the game's own rooms have them.
+    pub fn set_blocks(&mut self, blocks: &[Block]) {
+        let mut sorted: Vec<&Block> = blocks.iter().filter(|b| b.x < self.width && b.y < self.height).collect();
+        sorted.sort_by_key(|b| (b.y, b.x));
+        sorted.dedup_by_key(|b| (b.y, b.x));
+        let mut payload = Vec::with_capacity(sorted.len() * 6 + 2);
+        for block in sorted {
+            payload.extend_from_slice(&(((block.y * self.width + block.x) * 2) as u16).to_le_bytes());
+            payload.extend_from_slice(&block.after.to_le_bytes());
+            payload.extend_from_slice(&block.extra.to_le_bytes());
+        }
+        payload.extend_from_slice(&[0xFF, 0xFF]);
+        self.set_section(BLOCK_SECTION, &payload);
+    }
+
+    /// Brings the list of breakable cells in line with the map: a cell that
+    /// now holds a `breakable` metatile and did not in `before` gets a record
+    /// (breaking to the empty tile), and a record is dropped when its cell was a block in `before`
+    /// (the tiles as last loaded or saved) and no longer is. Other records
+    /// are left alone: the game's rooms also list decoration cells.
+    ///
+    /// Returns true when the list changed.
+    pub fn sync_blocks(&mut self, breakable: impl Fn(u16) -> bool, before: &[u16]) -> bool {
+        let old = self.blocks();
+        let mut blocks: Vec<Block> = old
+            .iter()
+            .copied()
+            .filter(|b| {
+                let cell = b.y * self.width + b.x;
+                let was_block = before.len() == self.tiles.len() && breakable(before[cell]);
+                b.x < self.width && b.y < self.height && !(was_block && !breakable(self.tiles[cell]))
+            })
+            .collect();
+        for y in 0..self.height {
+            for x in 0..self.width {
+                // Only blocks placed since `before`: a few original rooms
+                // have unlisted blocks, and those stay as they are.
+                let placed = before.get(y * self.width + x) != Some(&self.tile(x, y));
+                if placed && breakable(self.tile(x, y)) && !blocks.iter().any(|b| (b.x, b.y) == (x, y)) {
+                    blocks.push(Block { x, y, after: 0, extra: 0 });
+                }
+            }
+        }
+        blocks.sort_by_key(|b| (b.y, b.x));
+        let changed = blocks != old;
+        if changed {
+            self.set_blocks(&blocks);
+        }
+        changed
+    }
+
     pub fn doors(&self) -> Vec<Door> {
         let word = |at: usize| u16::from_le_bytes([self.head[at], self.head[at + 1]]);
         self.door_slots()
@@ -260,6 +376,8 @@ impl Room {
     /// Resizes the map, keeping the top-left cells and filling new ones with
     /// the empty tile.
     pub fn resize(&mut self, width: usize, height: usize) {
+        // Block records address cells by index, which depends on the width.
+        let blocks = self.blocks();
         let mut tiles = vec![0u16; width * height];
         for y in 0..height.min(self.height) {
             for x in 0..width.min(self.width) {
@@ -269,6 +387,9 @@ impl Room {
         self.tiles = tiles;
         self.width = width;
         self.height = height;
+        if !blocks.is_empty() {
+            self.set_blocks(&blocks);
+        }
     }
 
     /// The uncompressed map blob: two tile planes, then the object list.
@@ -528,6 +649,47 @@ mod tests {
                 Room::load(&original, &Tables::load(&original), index).unwrap()
             );
         }
+    }
+
+    #[test]
+    fn breakable_blocks_round_trip() {
+        let Some(original) = rom() else { return };
+        let mut rom = original.clone();
+        let mut tables = Tables::load(&rom);
+        // Room 3: four star blocks in row 4, their caps in row 3.
+        let stars = Room::load(&rom, &tables, 3).unwrap();
+        let blocks = stars.blocks();
+        assert_eq!(blocks.len(), 8);
+        assert_eq!(blocks[0], Block { x: 19, y: 3, after: 0, extra: 0 });
+        assert_eq!(blocks[4], Block { x: 19, y: 4, after: 0xAC, extra: 0x57 });
+        // Room 1 has none; add one and reload it from the image.
+        let mut room = Room::load(&rom, &tables, 1).unwrap();
+        assert!(room.blocks().is_empty());
+        let doors = room.doors();
+        room.set_tile(3, 5, 3);
+        room.set_blocks(&[Block { x: 3, y: 5, after: 0, extra: 0 }]);
+        room.save(&mut rom, &mut tables).unwrap();
+        let back = Room::load(&rom, &tables, 1).unwrap();
+        assert_eq!(back.blocks(), [Block { x: 3, y: 5, after: 0, extra: 0 }]);
+        assert_eq!(back.doors(), doors);
+        assert_eq!(back.tiles, room.tiles);
+        assert_eq!((back.width, back.height), (100, 8));
+        // Syncing a room that already lists its blocks changes nothing.
+        let tiles = crate::gfx::Tileset::for_room(&original, &Tables::load(&original), &stars);
+        let mut synced = stars.clone();
+        assert!(!synced.sync_blocks(|t| tiles.is_breakable(t), &stars.tiles));
+        // A new star block gets a record; painting it away drops it again.
+        synced.set_tile(2, 2, 0x56);
+        assert!(synced.sync_blocks(|t| tiles.is_breakable(t), &stars.tiles));
+        assert!(synced.blocks().contains(&Block { x: 2, y: 2, after: 0, extra: 0 }));
+        let with_block = synced.tiles.clone();
+        synced.set_tile(2, 2, 0);
+        assert!(synced.sync_blocks(|t| tiles.is_breakable(t), &with_block));
+        assert_eq!(synced.blocks(), blocks);
+        // Writing a room's own list back changes nothing.
+        let mut same = stars.clone();
+        same.set_blocks(&blocks);
+        assert_eq!(same, stars);
     }
 
     #[test]

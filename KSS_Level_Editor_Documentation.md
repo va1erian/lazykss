@@ -201,6 +201,28 @@ Only bank-tail padding is treated as free (about 32 KiB in total): runs of
 through the room pointer table, so they can live in any bank. Both paths
 were booted and played in an emulator.
 
+### Breakable blocks
+
+Section 3 of the room block lists the breakable cells, 6 bytes each, `FF FF`
+terminated **[emu]**:
+
+```
+cell_index * 2 (2)   metatile after breaking (2)   third word (2)
+```
+
+A star or bomb block (metatile attribute `70`-`7F`) is solid from the tile
+alone, but Kirby can only break it when its cell has a record here: the same
+star block was inert without one and inhaled with one. The first word is the
+byte offset of the cell in the 16-bit map. The third word is often the id of
+the cap metatile above the block and often 0; breaking works with 0, and its
+purpose is not established. The original rooms also list decoration cells
+(attributes `27`, `28`, `A8`) next to blocks, and leave some attribute-`76`
+cells unlisted.
+
+`Room::sync_blocks` adds a record for every block placed since the room was
+loaded and drops the record of a block that was painted over; the editor
+calls it on save.
+
 The door list cannot grow: the editor changes existing doors but does not add
 any.
 

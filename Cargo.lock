@@ -775,6 +775,7 @@ version = "0.1.0"
 dependencies = [
  "kss-core",
  "xui",
+ "xui-d2d",
 ]
 
 [[package]]
@@ -2520,6 +2521,17 @@ dependencies = [
  "png",
  "raw-window-handle",
  "zune-jpeg",
+]
+
+[[package]]
+name = "xui-d2d"
+version = "0.1.0"
+source = "git+https://github.com/va1erian/xui#832c61f29419bf31a0518a47e050b15c97b316e3"
+dependencies = [
+ "raw-window-handle",
+ "windows",
+ "windows-numerics",
+ "xui-core",
 ]
 
 [[package]]

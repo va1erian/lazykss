@@ -180,6 +180,13 @@ impl Tileset {
         self.attributes.get(metatile as usize).copied().unwrap_or(0)
     }
 
+    /// True for star, bomb and similar blocks (attribute `70`-`7F`). They
+    /// are solid from the tile alone but only break when the room lists
+    /// their cell (`Room::sync_blocks`).
+    pub fn is_breakable(&self, metatile: u16) -> bool {
+        (0x70..=0x7F).contains(&self.attribute(metatile))
+    }
+
     pub fn palette(&self) -> &[[u8; 4]; 256] {
         &self.palette
     }

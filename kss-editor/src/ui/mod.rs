@@ -29,7 +29,17 @@ pub const TITLE: &str = "lazykss \u{2014} Kirby Super Star level editor";
 
 /// Opens the window. `rom` overrides the automatic ROM lookup.
 pub fn run(rom: Option<PathBuf>) -> Result<()> {
-    xui::app(TITLE).size(WINDOW.0, WINDOW.1).run(move |ui| build_app(ui, rom, new_shared()))
+    let app = xui::app(TITLE).size(WINDOW.0, WINDOW.1);
+    // Windows draws with Direct2D; elsewhere xui's software backend runs.
+    // A headless snapshot run keeps the default, which renders offscreen:
+    // an explicit backend would open a real window instead.
+    #[cfg(windows)]
+    let app = if std::env::var_os("XUI_SNAPSHOT").is_some() {
+        app
+    } else {
+        app.backend(Rc::new(xui_d2d::D2dBackend::new()))
+    };
+    app.run(move |ui| build_app(ui, rom, new_shared()))
 }
 
 /// The window's initial size in design units.
