@@ -22,8 +22,8 @@ const WHEEL_STEP: i32 = 72;
 
 struct State {
     scroller: Scroller,
-    /// The sheet and the room it was built for.
-    sheet: Option<(usize, Image)>,
+    /// The sheet, and the opened ROM and room it was built for.
+    sheet: Option<((u64, usize), Image)>,
     pressed: bool,
 }
 
@@ -203,7 +203,7 @@ fn paint(
     st.scroller.dpi = canvas.dpi();
     canvas.fill_rect(bounds, theme.input_background);
     if let Some(editor) = editor {
-        let room = editor.current_index();
+        let room = (editor.session(), editor.current_index());
         if st.sheet.as_ref().is_none_or(|(r, _)| *r != room) {
             let fill = [0x30, 0x30, 0x38, 0xFF];
             st.sheet =

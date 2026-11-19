@@ -47,7 +47,8 @@ impl EditorApp {
         self.dirty_seen = dirty;
         let tree = self.h.tree.get();
         if rows != self.tree_rows {
-            tree.set_rows(&rows);
+            // Labels change under the user (a `*`, a size): keep the scroll.
+            tree.refresh_rows(&rows);
             self.tree_rows = rows;
         }
         self.tree_nodes = nodes;
