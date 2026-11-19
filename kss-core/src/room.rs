@@ -5,9 +5,9 @@
 //! ```text
 //! +0   17 bytes  misc header (music at +2, scroll rate at +6, ...)
 //! +17   5 bytes  FF padding
-//! +22  24 bytes  graphics header (see `gfx::GfxHeader`)
-//! +46   1 byte   FF
-//! +47   7 bytes  sprite palette header
+//! +22  24 bytes  graphics header (see the `gfx` module)
+//! +46   1 byte   fifth object graphics slot
+//! +47   7 bytes  99 01 01 01 01 01 99
 //! +54   4 bytes  two words, unknown (historically called "entrance")
 //! +58            six sections, each starting with a 16-bit pointer relative
 //!                to itself that leads to the next one. Section 0 holds the
@@ -192,6 +192,15 @@ impl Room {
         &self.head
     }
 
+    /// Overwrites header bytes. `offset` is relative to the room block; the
+    /// write is clipped to the fixed part before the door list.
+    pub fn patch_head(&mut self, offset: usize, bytes: &[u8]) {
+        let end = (offset + bytes.len()).min(SECTIONS_OFFSET);
+        if offset < end {
+            self.head[offset..end].copy_from_slice(&bytes[..end - offset]);
+        }
+    }
+
     pub fn music(&self) -> u8 {
         self.head[MISC_MUSIC]
     }
@@ -345,45 +354,25 @@ pub struct SaveReport {
     pub moved: bool,
 }
 
-/// Finds `needed` free bytes: a run of `FF` that does not cross a bank.
-/// Prefers the smallest run that fits.
+/// The run of `FF` that pads the end of each bank, as `(start, len)`, guard
+/// bytes excluded. Only this padding is treated as free: a run of `FF` inside
+/// a bank can be data (blank graphics, tables).
+fn free_runs(data: &[u8]) -> impl Iterator<Item = (usize, usize)> + '_ {
+    data.chunks(0x1_0000).enumerate().filter_map(|(bank, bytes)| {
+        let used = bytes.iter().rposition(|&b| b != 0xFF).map_or(0, |last| last + 1);
+        let run = bytes.len() - used;
+        (run >= MIN_FREE_RUN).then(|| (bank * 0x1_0000 + used + FREE_GUARD, run - FREE_GUARD))
+    })
+}
+
+/// Finds `needed` free bytes, in the smallest bank padding that fits.
 fn find_free(data: &[u8], needed: usize) -> Option<usize> {
-    let mut best: Option<(usize, usize)> = None;
-    let mut at = 0;
-    while at < data.len() {
-        if data[at] != 0xFF {
-            at += 1;
-            continue;
-        }
-        let bank_end = (at | 0xFFFF) + 1;
-        let end = data[at..bank_end.min(data.len())]
-            .iter()
-            .position(|&b| b != 0xFF)
-            .map_or(bank_end.min(data.len()), |n| at + n);
-        let run = end - at;
-        if run >= MIN_FREE_RUN && run >= needed + FREE_GUARD && best.is_none_or(|(_, len)| run < len) {
-            best = Some((at + FREE_GUARD, run));
-        }
-        at = end.max(at + 1);
-    }
-    best.map(|(start, _)| start)
+    free_runs(data).filter(|&(_, len)| len >= needed).min_by_key(|&(_, len)| len).map(|(start, _)| start)
 }
 
 /// Total free bytes [`Room::save`] could move rooms into.
 pub fn free_space(rom: &Rom) -> usize {
-    let data = rom.data();
-    let (mut total, mut run) = (0, 0);
-    for (i, &b) in data.iter().enumerate() {
-        if b == 0xFF && i & 0xFFFF != 0 {
-            run += 1;
-        } else {
-            if run >= MIN_FREE_RUN {
-                total += run - FREE_GUARD;
-            }
-            run = usize::from(b == 0xFF);
-        }
-    }
-    total
+    free_runs(rom.data()).map(|(_, len)| len).sum()
 }
 
 /// A stage: a run of consecutive rooms in the pointer table.

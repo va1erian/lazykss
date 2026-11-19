@@ -2,6 +2,16 @@
 name = "kss-editor"
 version = "0.1.0"
 edition = "2024"
+description = "Level editor GUI for Kirby Super Star (USA), built on xui"
+
+[lib]
+name = "kss_editor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kss-editor"
+path = "src/main.rs"
 
 [dependencies]
 kss-core = { path = "../kss-core" }
+xui = { git = "https://github.com/va1erian/xui" }

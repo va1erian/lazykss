@@ -1,0 +1,341 @@
+//! The window's layout: menu, toolbar, browser, map, side panel, status bars.
+
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use xui::layout::Insets;
+use xui::{Dip, Lucide};
+use xui::prelude::*;
+use xui::widget::FileDialog;
+
+use super::SharedEditor;
+use super::app::{DoorField, EditorApp, Handles, Layer, Msg, ObjField};
+use super::keys;
+use super::map::MapView;
+use super::picker::TilePicker;
+use crate::editor::{Editor, Tool};
+use kss_core::Rom;
+
+const OPEN: MenuId = MenuId::new(1);
+const SAVE: MenuId = MenuId::new(2);
+const SAVE_AS: MenuId = MenuId::new(3);
+const QUIT: MenuId = MenuId::new(4);
+const UNDO: MenuId = MenuId::new(10);
+const REDO: MenuId = MenuId::new(11);
+const ZOOM_IN: MenuId = MenuId::new(20);
+const ZOOM_OUT: MenuId = MenuId::new(21);
+
+fn menu_message(id: MenuId) -> Option<Msg> {
+    Some(match id {
+        OPEN => Msg::OpenRom,
+        SAVE => Msg::Save,
+        SAVE_AS => Msg::SaveAs,
+        QUIT => Msg::Quit,
+        UNDO => Msg::Undo,
+        REDO => Msg::Redo,
+        ZOOM_IN => Msg::ZoomIn,
+        ZOOM_OUT => Msg::ZoomOut,
+        _ => return None,
+    })
+}
+
+fn menu() -> Build<Menu<Msg>, Msg> {
+    menu_bar(|m| {
+        m.submenu(MenuId::new(100), "&File", |f| {
+            f.item(OPEN, "&Open ROM...    Ctrl+O");
+            f.item(SAVE, "&Save    Ctrl+S");
+            f.item(SAVE_AS, "Save &As...    Ctrl+Shift+S");
+            f.separator();
+            f.item(QUIT, "E&xit");
+        });
+        m.submenu(MenuId::new(101), "&Edit", |e| {
+            e.item(UNDO, "&Undo    Ctrl+Z");
+            e.item(REDO, "&Redo    Ctrl+Y");
+        });
+        m.submenu(MenuId::new(102), "&View", |v| {
+            v.item(ZOOM_IN, "Zoom &in");
+            v.item(ZOOM_OUT, "Zoom &out");
+        });
+    })
+    .on_select_with(menu_message)
+}
+
+/// A number field that reports its value when committed (Enter, a step or
+/// leaving the field).
+fn number(handle: &Handle<NumberField<Msg>>, max: f64, f: impl Fn(f64) -> Msg + 'static) -> Build<NumberField<Msg>, Msg> {
+    number_field(0.0, max, 1.0).then(move |n| n.on_commit(move |v| Some(f(v)))).bind(handle)
+}
+
+/// A square icon-only button.
+fn icon_button(icon: Lucide, tip: &str, msg: Msg) -> Build<Button<Msg>, Msg> {
+    button("").icon(icon).tooltip(tip).on_click(msg)
+}
+
+fn tool_icon(tool: Tool) -> Lucide {
+    match tool {
+        Tool::Select => Lucide::MousePointer2,
+        Tool::Paint => Lucide::Pencil,
+        Tool::Rect => Lucide::RectangleHorizontal,
+        // xui has no paint bucket; a filled disc reads as "flood".
+        Tool::Fill => Lucide::Disc,
+        Tool::AddObject => Lucide::Box,
+    }
+}
+
+fn toolbar_row(h: &Handles) -> Layout<Msg> {
+    let tools: Vec<_> = h
+        .tools
+        .iter()
+        .map(|(tool, handle)| {
+            let tool = *tool;
+            toggle_button("")
+                .icon(tool_icon(tool))
+                .tooltip(tool.hint())
+                .checked(tool == Tool::Select)
+                .on_toggle(move |_| Msg::SetTool(tool))
+                .bind(handle)
+                .width(36)
+        })
+        .collect();
+    let layers: Vec<_> = h
+        .layers
+        .iter()
+        .map(|(layer, handle)| {
+            let (name, icon, tip, width) = match layer {
+                Layer::Background => ("BG", Lucide::Image, "Show the background layer", 72),
+                Layer::Foreground => ("FG", Lucide::Square, "Show the foreground (tile) layer", 72),
+                Layer::Grid => ("", Lucide::LayoutGrid, "Show the cell grid", 36),
+                Layer::Doors => ("", Lucide::LogOut, "Show door triggers", 36),
+                Layer::Objects => ("", Lucide::Eye, "Show object markers", 36),
+            };
+            let layer = *layer;
+            toggle_button(name)
+                .icon(icon)
+                .tooltip(tip)
+                .checked(layer != Layer::Grid)
+                .on_toggle(move |on| Msg::Layer(layer, on))
+                .bind(handle)
+                .width(width)
+        })
+        .collect();
+    row().padding(6).gap(8).children((
+        row().gap(2).children((
+            icon_button(Lucide::FolderOpen, "Open a ROM (Ctrl+O)", Msg::OpenRom).width(36),
+            icon_button(Lucide::Save, "Save to the edited copy (Ctrl+S)", Msg::Save).width(36),
+            icon_button(Lucide::SaveAll, "Save to a chosen file (Ctrl+Shift+S)", Msg::SaveAs).width(36),
+        )),
+        row().gap(2).children((
+            icon_button(Lucide::Undo2, "Undo (Ctrl+Z)", Msg::Undo).bind(&h.undo).width(36),
+            icon_button(Lucide::Redo2, "Redo (Ctrl+Y)", Msg::Redo).bind(&h.redo).width(36),
+        )),
+        row().gap(2).children(tools),
+        row().gap(2).children(layers),
+        // The row centres its children vertically: the label is shorter
+        // than the buttons beside it.
+        row().gap(6).align(Align::Center).children((
+            icon_button(Lucide::Minus, "Zoom out (Ctrl+wheel)", Msg::ZoomOut).width(36),
+            // xui paints body text at the top of the label's line box, which
+            // reads high beside a button: push it to the bottom of the row.
+            column().padding(Insets::new(Dip(0.0), Dip(5.0), Dip(0.0), Dip(0.0))).child(label("2x").bind(&h.zoom_label)),
+            icon_button(Lucide::Plus, "Zoom in (Ctrl+wheel)", Msg::ZoomIn).width(36),
+        )),
+    ))
+}
+
+fn tiles_tab(h: &Handles, editor: &SharedEditor) -> Layout<Msg> {
+    let shared = Rc::clone(editor);
+    column().padding(8).gap(6).children((
+        label("").bind(&h.tile_info),
+        build(move |ui| TilePicker::new(ui, shared, Msg::PickTile)).bind(&h.picker).fill(1),
+    ))
+}
+
+fn objects_tab(h: &Handles) -> Layout<Msg> {
+    let f = &h.object_fields;
+    let n = &h.new_object_fields;
+    column().padding(8).gap(6).children((
+        list()
+            .column("ID", 36)
+            .column("Name", Fill)
+            .column("Var", 36)
+            .column_right("X", 48)
+            .column_right("Y", 40)
+            .on_select(Msg::ObjectSelect)
+            .bind(&h.objects)
+            .fill(1),
+        row().gap(6).children((
+            button("Add").tooltip("Add an object in the middle of the view").on_click(Msg::ObjectAdd),
+            button("Delete").tooltip("Delete the selected object (Del)").on_click(Msg::ObjectDelete),
+        )),
+        group(
+            "Selected object (values in decimal)",
+            grid([Track::Auto, Track::Fill(1), Track::Auto, Track::Fill(1)]).gap(6).children((
+                label("ID").align(Align::Center),
+                number(&f[0], 255.0, |v| Msg::ObjectField(ObjField::Id, v)),
+                label("Variant").align(Align::Center),
+                number(&f[1], 255.0, |v| Msg::ObjectField(ObjField::Variant, v)),
+                label("X").align(Align::Center),
+                number(&f[2], 65535.0, |v| Msg::ObjectField(ObjField::X, v)),
+                label("Y").align(Align::Center),
+                number(&f[3], 65535.0, |v| Msg::ObjectField(ObjField::Y, v)),
+            )),
+        ),
+        group(
+            "New object (Object tool)",
+            grid([Track::Auto, Track::Fill(1), Track::Auto, Track::Fill(1)]).gap(6).children((
+                label("ID").align(Align::Center),
+                number(&n[0], 255.0, |v| Msg::NewObjectField(ObjField::Id, v)),
+                label("Variant").align(Align::Center),
+                number(&n[1], 255.0, |v| Msg::NewObjectField(ObjField::Variant, v)),
+            )),
+        ),
+    ))
+}
+
+fn doors_tab(h: &Handles) -> Layout<Msg> {
+    let f = &h.door_fields;
+    column().padding(8).gap(6).children((
+        list()
+            .column("#", 28)
+            .column("To room", 64)
+            .column("Trigger", Fill)
+            .column("Arrive at", 90)
+            .on_select(Msg::DoorSelect)
+            .bind(&h.doors)
+            .fill(1),
+        group(
+            "Selected door",
+            grid([Track::Auto, Track::Fill(1), Track::Auto, Track::Fill(1)]).gap(6).children((
+                label("To room").align(Align::Center),
+                number(&f[0], 65535.0, |v| Msg::DoorField(DoorField::DestRoom, v)),
+                label("").span(2),
+                label("Trigger X").align(Align::Center),
+                number(&f[1], 65535.0, |v| Msg::DoorField(DoorField::X, v)),
+                label("Trigger Y").align(Align::Center),
+                number(&f[2], 65535.0, |v| Msg::DoorField(DoorField::Y, v)),
+                label("Arrive X").align(Align::Center),
+                number(&f[3], 65535.0, |v| Msg::DoorField(DoorField::DestX, v)),
+                label("Arrive Y").align(Align::Center),
+                number(&f[4], 65535.0, |v| Msg::DoorField(DoorField::DestY, v)),
+            )),
+        ),
+        label("").bind(&h.door_note),
+        row().child(button("Go to destination").on_click(Msg::DoorGoto)),
+    ))
+}
+
+fn room_tab(h: &Handles) -> Layout<Msg> {
+    column().padding(8).gap(6).children((
+        group(
+            "Music",
+            grid([Track::Auto, Track::Fill(1)]).gap(6).children((
+                label("Song id").align(Align::Center),
+                number(&h.music, 255.0, Msg::Music),
+                label("Name").align(Align::Center),
+                label("").bind(&h.music_name),
+            )),
+        ),
+        group(
+            "Size (cells of 24x24 pixels)",
+            column().gap(6).children((
+                grid([Track::Auto, Track::Fill(1), Track::Auto, Track::Fill(1)]).gap(6).children((
+                    label("Width").align(Align::Center),
+                    number_field(1.0, 512.0, 1.0)
+                        .then(|n| n.on_commit(|v| Some(Msg::RoomWidth(v))))
+                        .bind(&h.size_fields[0]),
+                    label("Height").align(Align::Center),
+                    number_field(1.0, 128.0, 1.0)
+                        .then(|n| n.on_commit(|v| Some(Msg::RoomHeight(v))))
+                        .bind(&h.size_fields[1]),
+                )),
+                row().child(button("Resize").tooltip("Keeps the top-left cells; new cells are empty").on_click(Msg::ResizeRoom)),
+            )),
+        ),
+        label("Room header (read-only)").caption(),
+        list().column("Offset  bytes", Fill).bind(&h.head).fill(1),
+    ))
+}
+
+/// Builds the window and returns the app, with the first room open.
+pub fn create(ui: &mut Ui<Msg>, rom: Option<PathBuf>, editor: SharedEditor) -> Result<EditorApp> {
+    let mut h = Handles::default();
+    h.tools = Tool::ALL.iter().map(|t| (*t, Handle::new())).collect();
+    h.layers = [Layer::Background, Layer::Foreground, Layer::Grid, Layer::Doors, Layer::Objects]
+        .into_iter()
+        .map(|l| (l, Handle::new()))
+        .collect();
+
+    let map_editor = Rc::clone(&editor);
+    ui.root(column().children((
+        menu(),
+        toolbar_row(&h),
+        row()
+            .padding(6)
+            .gap(6)
+            .children((
+                tree_view()
+                    .on_select(Msg::BrowserSelect)
+                    .then(|t| t.on_toggle(|id, open| Some(Msg::BrowserToggle(id, open))))
+                    .bind(&h.tree)
+                    .width(250),
+                build(move |ui| MapView::new(ui, map_editor, Msg::Map)).bind(&h.map).fill(1),
+                tabs()
+                    .page("Tiles", tiles_tab(&h, &editor))
+                    .page("Objects", objects_tab(&h))
+                    .page("Doors", doors_tab(&h))
+                    .page("Room", room_tab(&h))
+                    .bind(&h.tabs)
+                    .width(350),
+            ))
+            .fill(1),
+        status_bar(&["", "", ""]).bind(&h.info),
+        status_bar(&["Ready"]).bind(&h.message),
+    )))?;
+
+    ui.on_key(keys::shortcut);
+
+    let open_dialog = FileDialog::open_file(ui, "Open ROM")?
+        .filter("SNES ROM", &["sfc", "smc"])
+        .on_accept(|path| Some(Msg::RomChosen(path)))
+        .on_cancel(|| None);
+    let save_dialog = FileDialog::save_file(ui, "Save As")?
+        .filter("SNES ROM", &["sfc", "smc"])
+        .on_accept(|path| Some(Msg::SaveAsChosen(path)))
+        .on_cancel(|| None);
+
+    let mut app = EditorApp::new(editor, h, open_dialog, save_dialog);
+    app.start(rom);
+    Ok(app)
+}
+
+impl EditorApp {
+    /// Opens the ROM from the command line or the usual place; with none, the
+    /// window stays in its empty state.
+    fn start(&mut self, rom: Option<PathBuf>) {
+        let path = rom.or_else(Rom::locate);
+        if let Ok(zoom) = std::env::var("KSS_ZOOM").map(|z| z.parse::<i32>()) {
+            if let Ok(zoom) = zoom {
+                self.h.map.get().update_view(|v| v.set_zoom_centered(zoom));
+            }
+        }
+        match path {
+            Some(path) => match Editor::open(&path) {
+                Ok(editor) => {
+                    *self.editor.borrow_mut() = Some(editor);
+                    self.room_changed();
+                    self.say(&format!("Opened {}  -  Save writes to a new \"(edited)\" file, never over this one", path.display()));
+                }
+                Err(e) => {
+                    self.refresh_history_buttons();
+                    self.refresh_status();
+                    self.say(&format!("Could not open ROM: {e}"));
+                }
+            },
+            None => {
+                self.refresh_history_buttons();
+                self.refresh_status();
+                self.say("No ROM found. Use File > Open ROM... (or set KSS_ROM).");
+            }
+        }
+    }
+}
