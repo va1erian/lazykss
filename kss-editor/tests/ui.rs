@@ -407,7 +407,11 @@ fn door_edit_and_destination_jump() {
             "the door field edits the door",
         );
         s.emit(Msg::DoorGoto);
-        let dest = doors[0].dest_room as usize;
+        // Destinations count from the level's first room (0 for Green Greens).
+        let dest = match editor.borrow().as_ref().unwrap().tables().level_of(1) {
+            Some(level) => level.rooms.start + doors[0].dest_room as usize,
+            None => usize::MAX,
+        };
         check(
             log,
             editor.borrow().as_ref().unwrap().current_index() == dest,

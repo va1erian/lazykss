@@ -72,7 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     dest_y: n(5)?,
                 };
                 let count = room.doors().len();
-                room.insert_door(count, door);
+                if !room.insert_door(count, door) {
+                    return Err(format!("door {door:?} cannot be added").into());
+                }
                 at += 6;
             }
             "clear-doors" => {

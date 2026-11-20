@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use kss_core::names::TREASURE_CHEST;
+use kss_core::names::{DOOR_STAR, TREASURE_CHEST};
 use kss_core::{Destination, Door, Object};
 use xui::prelude::*;
 use xui::widget::FileDialog;
@@ -348,7 +348,16 @@ impl EditorApp {
         match tool {
             Tool::Select => {
                 let radius = 8 + 4 / zoom;
-                let hit = self.ed(|e| e.object_at(pos.0, pos.1, radius)).flatten();
+                // A door's invisible star sits in the middle of its box: a
+                // click there means the door (the star stays in the list).
+                let hit = self
+                    .ed(|e| {
+                        e.object_at(pos.0, pos.1, radius).filter(|&i| {
+                            let o = e.room().objects[i];
+                            !(o.id == DOOR_STAR && e.door_at(o.x as i32, o.y as i32).is_some())
+                        })
+                    })
+                    .flatten();
                 match hit {
                     Some(index) => {
                         let o = self.ed_mut(|e| {
@@ -561,6 +570,24 @@ impl EditorApp {
             self.after_edit();
         } else {
             self.refresh_door_fields();
+            if field == DoorField::DestRoom {
+                // Say why a room the door cannot store was refused.
+                let reason = self
+                    .ed(|e| {
+                        let level = e.level()?;
+                        let room = value as usize;
+                        Door::relative_to(level, room).is_none().then(|| {
+                            format!(
+                                "Room {room} cannot be stored: doors count from {}'s first room ({})",
+                                level.name, level.rooms.start
+                            )
+                        })
+                    })
+                    .flatten();
+                if let Some(reason) = reason {
+                    self.say(&reason);
+                }
+            }
         }
     }
 

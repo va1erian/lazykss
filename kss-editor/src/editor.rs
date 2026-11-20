@@ -828,13 +828,25 @@ impl Editor {
         self.perform(Change::RemoveDoor { index, door });
         let half = CELL as u16 / 2;
         let star_at = (door.x.wrapping_add(half), door.y.wrapping_add(half));
-        let marker = |o: &Object| {
-            o.warp_door() == Some(index)
-                || (o.id == DOOR_STAR && door.has_trigger() && (o.x, o.y) == star_at)
-        };
-        let doomed: Vec<usize> = (0..self.room().objects.len())
-            .filter(|&i| marker(&self.room().objects[i]))
+        // When a remaining door has its trigger on the same cell, one star
+        // stays for it.
+        let shared = self
+            .room()
+            .doors()
+            .iter()
+            .any(|d| (d.x, d.y) == (door.x, door.y));
+        let objects = &self.room().objects;
+        let stars = (0..objects.len())
+            .filter(|&i| {
+                let o = objects[i];
+                door.has_trigger() && o.id == DOOR_STAR && (o.x, o.y) == star_at
+            })
+            .skip(usize::from(shared));
+        let mut doomed: Vec<usize> = (0..objects.len())
+            .filter(|&i| objects[i].warp_door() == Some(index))
+            .chain(stars)
             .collect();
+        doomed.sort_unstable();
         for &i in doomed.iter().rev() {
             let object = self.room().objects[i];
             self.perform(Change::RemoveObject { index: i, object });
@@ -1399,6 +1411,25 @@ mod tests {
                 ..first
             }
         ));
+    }
+
+    #[test]
+    fn a_door_sharing_a_cell_keeps_one_star() {
+        let Some(mut e) = editor() else { return };
+        // Room 1's door 0 is on (384, 120); add a second door on that cell.
+        let stars = |e: &Editor| {
+            e.room()
+                .objects
+                .iter()
+                .filter(|o| o.id == DOOR_STAR && (o.x, o.y) == (396, 132))
+                .count()
+        };
+        let i = e.add_door(390, 125).unwrap();
+        assert_eq!(stars(&e), 2);
+        assert!(e.remove_door(i));
+        assert_eq!(stars(&e), 1, "door 0 keeps its star");
+        assert!(e.remove_door(0));
+        assert_eq!(stars(&e), 0);
     }
 
     #[test]
