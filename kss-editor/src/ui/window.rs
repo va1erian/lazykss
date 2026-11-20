@@ -213,12 +213,23 @@ fn doors_tab(h: &Handles) -> Layout<Msg> {
     column().padding(8).gap(6).children((
         list()
             .column("#", 28)
-            .column("To room", 64)
+            .column("To", 84)
             .column("Trigger", Fill)
             .column("Arrive at", 90)
             .on_select(Msg::DoorSelect)
             .bind(&h.doors)
             .fill(1),
+        row().gap(6).children((
+            button("Add door")
+                .tooltip("Add a door (and its door star) in the middle of the view")
+                .on_click(Msg::DoorAdd),
+            button("Add warp")
+                .tooltip("Add a warp star and the door record it uses")
+                .on_click(Msg::WarpAdd),
+            button("Delete")
+                .tooltip("Delete the selected door, its door star and its warp stars")
+                .on_click(Msg::DoorDelete),
+        )),
         group(
             "Selected door",
             grid([Track::Auto, Track::Fill(1), Track::Auto, Track::Fill(1)])
@@ -226,19 +237,39 @@ fn doors_tab(h: &Handles) -> Layout<Msg> {
                 .children((
                     label("To room").align(Align::Center),
                     number(&f[0], 65535.0, |v| Msg::DoorField(DoorField::DestRoom, v)),
-                    label("").span(2),
+                    label("Stored").align(Align::Center),
+                    number(&f[1], 65534.0, |v| Msg::DoorField(DoorField::Raw, v)),
                     label("Trigger X").align(Align::Center),
-                    number(&f[1], 65535.0, |v| Msg::DoorField(DoorField::X, v)),
+                    number(&f[2], 65535.0, |v| Msg::DoorField(DoorField::X, v)),
                     label("Trigger Y").align(Align::Center),
-                    number(&f[2], 65535.0, |v| Msg::DoorField(DoorField::Y, v)),
+                    number(&f[3], 65535.0, |v| Msg::DoorField(DoorField::Y, v)),
                     label("Arrive X").align(Align::Center),
-                    number(&f[3], 65535.0, |v| Msg::DoorField(DoorField::DestX, v)),
+                    number(&f[4], 65535.0, |v| Msg::DoorField(DoorField::DestX, v)),
                     label("Arrive Y").align(Align::Center),
-                    number(&f[4], 65535.0, |v| Msg::DoorField(DoorField::DestY, v)),
+                    number(&f[5], 65535.0, |v| Msg::DoorField(DoorField::DestY, v)),
                 )),
         ),
         label("").bind(&h.door_note),
         row().child(button("Go to destination").on_click(Msg::DoorGoto)),
+    ))
+}
+
+fn treasures_tab(h: &Handles) -> Layout<Msg> {
+    column().padding(8).gap(6).children((
+        list()
+            .column("#", 28)
+            .column("Treasure", Fill)
+            .column_right("Value", 70)
+            .column("Room", 70)
+            .on_select(Msg::TreasureSelect)
+            .bind(&h.treasures)
+            .fill(1),
+        label("").bind(&h.treasure_note),
+        row().child(
+            button("Place with Object tool")
+                .tooltip("Click on the map to place a chest of the picked treasure")
+                .on_click(Msg::TreasurePlace),
+        ),
     ))
 }
 
@@ -306,6 +337,7 @@ pub fn create(ui: &mut Ui<Msg>, rom: Option<PathBuf>, editor: SharedEditor) -> R
                         .page("Objects", objects_tab(&h))
                         .page("Doors", doors_tab(&h))
                         .page("Room", room_tab(&h))
+                        .page("Treasures", treasures_tab(&h))
                         .bind(&h.tabs)
                         .width(350),
                 ))

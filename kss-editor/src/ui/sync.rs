@@ -1,6 +1,8 @@
 //! Pushing the editor's state into the widgets.
 
-use kss_core::names::{object_name, song_name};
+use kss_core::Destination;
+use kss_core::names::song_name;
+use kss_core::treasure;
 use xui::prelude::*;
 
 use super::app::EditorApp;
@@ -31,6 +33,7 @@ impl EditorApp {
         self.refresh_objects();
         self.refresh_doors();
         self.refresh_room_tab();
+        self.refresh_treasures();
         self.refresh_status();
         self.h.map.get().invalidate();
     }
@@ -114,7 +117,7 @@ impl EditorApp {
                 .map(|o| {
                     vec![
                         format!("{:02X}", o.id),
-                        object_name(o.id).unwrap_or("").to_string(),
+                        e.object_label(o),
                         format!("{:02X}", o.variant),
                         o.x.to_string(),
                         o.y.to_string(),
@@ -170,11 +173,14 @@ impl EditorApp {
                 .iter()
                 .enumerate()
                 .map(|(i, d)| {
+                    let warps = e.warps_of(i);
                     vec![
                         i.to_string(),
-                        d.dest_room.to_string(),
+                        e.destination_label(d),
                         if d.has_trigger() {
                             format!("{}, {}", d.x, d.y)
+                        } else if !warps.is_empty() {
+                            "warp star".to_string()
                         } else {
                             "none".to_string()
                         },
@@ -195,16 +201,22 @@ impl EditorApp {
     pub(super) fn refresh_door_fields(&self) {
         let info = self
             .ed(|e| {
-                (
-                    e.selected_door
-                        .and_then(|i| e.room().doors().get(i).copied()),
-                    e.room_count(),
-                )
+                let door = e
+                    .selected_door
+                    .and_then(|i| e.room().doors().get(i).copied().map(|d| (i, d)));
+                let level = e.level().map(|l| (l.name.clone(), l.rooms.clone()));
+                door.map(|(i, d)| (d, e.destination(&d), e.warps_of(i).len(), level))
             })
-            .unwrap_or((None, 0));
-        let (door, count) = info;
-        let values = door.map_or([0.0; 5], |d| {
+            .flatten();
+        let count = self.ed(|e| e.room_count()).unwrap_or(0);
+        let door = info.as_ref().map(|i| i.0);
+        let room = match info.as_ref().and_then(|i| i.1) {
+            Some(Destination::Room(r)) => Some(r),
+            _ => None,
+        };
+        let values = door.map_or([0.0; 6], |d| {
             [
+                room.unwrap_or(0) as f64,
                 d.dest_room as f64,
                 d.x as f64,
                 d.y as f64,
@@ -212,25 +224,105 @@ impl EditorApp {
                 d.dest_y as f64,
             ]
         });
-        for (field, value) in self.h.door_fields.iter().zip(values) {
+        for (i, (field, value)) in self.h.door_fields.iter().zip(values).enumerate() {
             let field = field.get();
             field.set_value(value);
-            field.set_enabled(door.is_some());
+            // The room field only means something for a door to a room.
+            field.set_enabled(door.is_some() && (i != 0 || room.is_some()));
         }
-        let note = match door {
+        let note = match info {
             None => "Select a door in the list or on the map.".to_string(),
-            Some(d) if d.dest_room as usize >= count => {
-                format!(
-                    "Warning: room {} does not exist (the ROM has {count} rooms).",
-                    d.dest_room
-                )
+            Some((d, destination, warps, level)) => {
+                // One line fits the panel: the most important thing to say.
+                match (destination, &level) {
+                    (Some(Destination::Room(r)), _) if r >= count => {
+                        format!("Warning: room {r} does not exist.")
+                    }
+                    (Some(Destination::Room(r)), Some((name, rooms))) if !rooms.contains(&r) => {
+                        format!("Warning: room {r} is outside {name}.")
+                    }
+                    (Some(Destination::LevelExit), _) => {
+                        "The stage's goal door (stored 7FFF).".to_string()
+                    }
+                    (Some(Destination::Special(v)), _) => {
+                        format!("Stored {v:04X}: not a room (meaning unknown).")
+                    }
+                    _ if !d.has_trigger() => match warps {
+                        0 => "No trigger, and no warp star uses it.".to_string(),
+                        1 => "No trigger: a warp star in this room uses it.".to_string(),
+                        n => format!("No trigger: {n} warp stars use it."),
+                    },
+                    (_, Some((_, rooms))) => {
+                        format!("Stored counts from room {} (level start).", rooms.start)
+                    }
+                    _ => String::new(),
+                }
             }
-            Some(d) if !d.has_trigger() => {
-                "No trigger in this room: a warp or room exit.".to_string()
-            }
-            Some(_) => String::new(),
         };
         self.h.door_note.get().set_text(&note);
+    }
+
+    // ---- treasures ----
+
+    pub(super) fn refresh_treasures(&mut self) {
+        let Some((chests, current)) = self.ed(|e| (e.chests(), e.current_index())) else {
+            return;
+        };
+        let mut numbers: Vec<u8> = (0..treasure::COUNT as u8).collect();
+        for c in &chests {
+            if !numbers.contains(&c.treasure) {
+                numbers.push(c.treasure);
+            }
+        }
+        let rows: Vec<Vec<String>> = numbers
+            .iter()
+            .map(|&n| {
+                let here: Vec<_> = chests.iter().filter(|c| c.treasure == n).collect();
+                let (name, value) = match treasure::treasure(n) {
+                    Some(t) => (t.name.to_string(), format!("{}G", t.value)),
+                    None => ("(no such treasure)".to_string(), String::new()),
+                };
+                let room = match here.as_slice() {
+                    [] => "no chest".to_string(),
+                    [one] if one.room == current => format!("{} (here)", one.room),
+                    [one] => one.room.to_string(),
+                    many => format!("{} chests!", many.len()),
+                };
+                vec![n.to_string(), name, value, room]
+            })
+            .collect();
+        let list = self.h.treasures.get();
+        list.refresh_model(rows);
+        list.select(
+            self.treasure
+                .and_then(|t| numbers.iter().position(|&n| n == t)),
+        );
+        self.treasure_rows = numbers;
+        let placed = (0..treasure::COUNT as u8)
+            .filter(|n| chests.iter().any(|c| c.treasure == *n))
+            .count();
+        let note = match self.treasure {
+            Some(n) => {
+                let here: Vec<_> = chests.iter().filter(|c| c.treasure == n).collect();
+                match here.as_slice() {
+                    [] => format!("Treasure {n} has no chest in the cave."),
+                    [c] => format!("Treasure {n}: room {}, at ({}, {}).", c.room, c.x, c.y),
+                    many => {
+                        let rooms: Vec<String> = many.iter().map(|c| c.room.to_string()).collect();
+                        format!(
+                            "Treasure {n} is in {} chests: rooms {}.",
+                            many.len(),
+                            rooms.join(", ")
+                        )
+                    }
+                }
+            }
+            None => format!(
+                "{placed} of {} treasures have a chest in the cave.",
+                treasure::COUNT
+            ),
+        };
+        self.h.treasure_note.get().set_text(&note);
     }
 
     // ---- room tab ----

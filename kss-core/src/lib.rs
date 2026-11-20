@@ -8,8 +8,9 @@ pub mod rom;
 pub mod room;
 mod sprite_table;
 pub mod sprites;
+pub mod treasure;
 
 pub use gfx::{Image, Layers, Tileset};
 pub use rom::Rom;
-pub use room::{Block, CELL, Door, Level, Object, Room, SaveReport, Tables};
+pub use room::{Block, CELL, Destination, Door, Level, Object, Room, SaveReport, Tables};
 pub use sprites::{ObjectSprites, Sprite};

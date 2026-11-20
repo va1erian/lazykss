@@ -1,6 +1,15 @@
 //! Human-readable names for object and song ids (community research:
 //! Super Famicom Development Wiki, Proto K and darklink).
 
+/// The invisible marker placed on each door (variant 16 on a goal door).
+pub const DOOR_STAR: u8 = 0x72;
+/// A warp star: its variant is the index of its door record (§3 of the
+/// documentation).
+pub const WARP_STAR: u8 = 0x75;
+/// A Great Cave Offensive treasure chest: its variant is the treasure
+/// number (see `treasure`).
+pub const TREASURE_CHEST: u8 = 0xB8;
+
 /// Name of an object id, when known.
 pub fn object_name(id: u8) -> Option<&'static str> {
     Some(match id {
@@ -32,9 +41,9 @@ pub fn object_name(id: u8) -> Option<&'static str> {
         0x55 => "Dyna Blade",
         0x5A => "Meta Knight",
         0x60 => "Nova's heart",
-        0x72 => "Door star",
+        DOOR_STAR => "Door star",
         0x73 => "Stage clear",
-        0x75 => "Warp Star",
+        WARP_STAR => "Warp Star",
         0x77 => "Vertical autoscroll",
         0x78 => "Mine cart",
         0x7A => "Launch cannon",
@@ -44,6 +53,7 @@ pub fn object_name(id: u8) -> Option<&'static str> {
         0x83..=0x8D => "Food",
         0x90..=0x95 => "Ability item",
         0xA0..=0xA6 => "Stage intro",
+        TREASURE_CHEST => "Treasure chest",
         _ => return None,
     })
 }

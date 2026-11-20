@@ -46,6 +46,10 @@ Levels 0-3 are Spring Breeze: Green Greens (rooms 0-5), Float Islands
 (6-14), Bubbly Clouds (15-23), Mt. Dedede (24-26) **[rom]**. The first room
 of each stage is its title card.
 
+Level 15 is The Great Cave Offensive: one level of 81 rooms (72-152), the
+only one holding treasure chests (§6a) **[rom]**. A level's room range ends
+where the next level's begins.
+
 ## 3. Room block
 
 At the address its room pointer gives **[rom]**:
@@ -72,9 +76,29 @@ Doors are 10-byte records, `FF FF` terminated:
 dest_room(2)  x(2)  y(2)  dest_x(2)  dest_y(2)
 ```
 
-Positions are pixels. `x = y = FF00` marks an exit with no trigger area
-(reached by a warp star or the end of the room). `dest_room` indexes the room
-pointer table; the game does not validate it.
+Positions are pixels.
+
+- **`dest_room` counts from the first room of the door's level**, not from
+  the start of the room pointer table **[emu]**. Float Islands' room 7 leads
+  to "2", which is room 8; The Great Cave Offensive's room 72 leads to "2",
+  room 74. Shown by `tools/harness/experiment_doors.py`: the same door,
+  stored as 2, entered room 2 from Green Greens and room 8 once Green Greens'
+  level-table entry was moved to start at room 6. Across the ROM, 266 doors
+  have a door back from their target when read this way, 2 when read as
+  table indices **[rom]**. In Spring Breeze's first stage the two readings
+  agree, which is why this went unnoticed.
+- `7FFF` is a stage's goal door; its door star has variant 16 **[rom]**.
+  Other values from `4000` up occur (`4008`, `4007`, next to object `79`);
+  their meaning is not established.
+- `x`, `y` is the top-left corner of the trigger cell: the game's door stars
+  (object `72`, invisible) sit at `x + 12, y + 12`, and Kirby enters a door
+  by pressing Up while in that cell **[emu]**: a door put on the cell above
+  Kirby did nothing, on his own cell it worked.
+- `x = y = FF00` marks a door with no trigger area. A **warp star** (object
+  `75`) uses one: its variant is the index of its record in the door list
+  (room 1's warp star has variant 1 and door 1 has no trigger; room 134's
+  has variant 8, its ninth door) **[rom]**. The game does not validate
+  `dest_room`.
 
 ## 4. Map blob
 
@@ -168,6 +192,23 @@ pairs used in Spring Breeze are covered; the bosses, the stage intro
 objects, the door star (invisible) and a few objects that did not appear in
 the capture are drawn as labelled boxes.
 
+## 6a. Treasures (The Great Cave Offensive)
+
+A treasure chest is object `B8`; its **variant is the treasure number**,
+0-59 **[emu]**. The number alone decides what the chest holds: a chest of
+each number placed in Green Greens room 1 and opened showed that treasure's
+name and value (`tools/harness/experiment_treasures.py`; the table is
+`kss-core/src/treasure.rs`). Numbers from 60 open an empty window.
+
+The values are also in the ROM, at `0xF4B1A`: 60 records of 5 bytes, a
+24-bit value then a word holding a permutation of 0-59 whose use is not
+established **[rom]**. They add up to 9,999,990 G.
+
+The cave's rooms hold 58 chests, one for every treasure except 0 (Gold
+Medal) and 16 (Saucepan) **[rom]**. How those two are obtained was not looked
+at. Neither was what happens when two chests share a number, or whether a
+chest outside the cave counts towards the collection.
+
 ## 7. HAL compression
 
 A stream of chunks ended by `FF`. A chunk starts with `CCCLLLLL` (command,
@@ -229,8 +270,17 @@ calls it on save.
 A room holds at most 30,000 cells: both tile planes and the object list
 must fit one 64 KiB stream.
 
-The door list cannot grow: the editor changes existing doors but does not add
-any.
+### Adding and removing doors
+
+The six sections are found by following their relative pointers, so section
+0 can change size and the rest move with it. `Room::set_doors` rewrites the
+door list that way **[emu]**: room 1 with a door appended, and with its list
+emptied and refilled, booted, the added door took Kirby to its destination,
+and the star blocks listed in the moved section 3 still broke
+(`tools/harness/experiment_doors.py`).
+
+Warp stars name their door by index, so removing a door renumbers the warp
+stars of the doors after it; the editor does that in the same undo step.
 
 ## 9. Tools used to establish this
 

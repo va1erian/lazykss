@@ -3,7 +3,8 @@
 
 use std::path::PathBuf;
 
-use kss_core::{Door, Object};
+use kss_core::names::TREASURE_CHEST;
+use kss_core::{Destination, Door, Object};
 use xui::prelude::*;
 use xui::widget::FileDialog;
 
@@ -24,7 +25,10 @@ pub enum ObjField {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoorField {
+    /// The destination as a room of the pointer table.
     DestRoom,
+    /// The stored value: level-relative, or a special code.
+    Raw,
     X,
     Y,
     DestX,
@@ -62,6 +66,12 @@ pub enum Msg {
     DoorSelect(usize),
     DoorField(DoorField, f64),
     DoorGoto,
+    DoorAdd,
+    WarpAdd,
+    DoorDelete,
+    // treasures tab
+    TreasureSelect(usize),
+    TreasurePlace,
     // room tab
     Music(f64),
     RoomWidth(f64),
@@ -119,8 +129,10 @@ pub struct Handles {
     pub object_fields: [Handle<NumberField<Msg>>; 4],
     pub new_object_fields: [Handle<NumberField<Msg>>; 2],
     pub doors: Handle<ListView<Msg>>,
-    pub door_fields: [Handle<NumberField<Msg>>; 5],
+    pub door_fields: [Handle<NumberField<Msg>>; 6],
     pub door_note: Handle<Label<Msg>>,
+    pub treasures: Handle<ListView<Msg>>,
+    pub treasure_note: Handle<Label<Msg>>,
     pub music: Handle<NumberField<Msg>>,
     pub music_name: Handle<Label<Msg>>,
     pub size_fields: [Handle<NumberField<Msg>>; 2],
@@ -141,6 +153,10 @@ pub struct EditorApp {
     pub(super) cursor: Option<((i32, i32), (i32, i32))>,
     pub(super) size: (usize, usize),
     pub(super) discard_armed: bool,
+    /// The treasure number of each row of the treasure list.
+    pub(super) treasure_rows: Vec<u8>,
+    /// The treasure picked in the list.
+    pub(super) treasure: Option<u8>,
 }
 
 impl EditorApp {
@@ -163,6 +179,8 @@ impl EditorApp {
             cursor: None,
             size: (1, 1),
             discard_armed: false,
+            treasure_rows: Vec::new(),
+            treasure: None,
         }
     }
 
@@ -195,9 +213,7 @@ impl EditorApp {
     }
 
     fn new_expansion() -> [bool; GROUPS] {
-        let mut expanded = [false; GROUPS];
-        expanded[..GROUPS - 1].fill(true);
-        expanded
+        tree::initial_expansion()
     }
 
     fn save(&mut self, as_path: Option<PathBuf>) {
@@ -247,6 +263,7 @@ impl EditorApp {
         self.refresh_objects();
         self.refresh_doors();
         self.refresh_room_tab();
+        self.refresh_treasures();
         self.refresh_status();
     }
 
@@ -458,8 +475,13 @@ impl EditorApp {
                 self.refresh_objects();
             }
             MapKey::DeleteObject => {
+                // The selected object, else the selected door.
                 let removed = self
-                    .ed_mut(|e| e.selected_object.is_some_and(|i| e.remove_object(i)))
+                    .ed_mut(|e| match (e.selected_object, e.selected_door) {
+                        (Some(i), _) => e.remove_object(i),
+                        (None, Some(i)) => e.remove_door(i),
+                        (None, None) => false,
+                    })
                     .unwrap_or(false);
                 if removed {
                     self.after_edit();
@@ -514,7 +536,15 @@ impl EditorApp {
                 let i = e.selected_door?;
                 let d = *e.room().doors().get(i)?;
                 let new = match field {
-                    DoorField::DestRoom => Door {
+                    DoorField::DestRoom => {
+                        // Stored relative to the level's first room.
+                        let level = e.level()?;
+                        Door {
+                            dest_room: Door::relative_to(level, value as usize)?,
+                            ..d
+                        }
+                    }
+                    DoorField::Raw => Door {
                         dest_room: value,
                         ..d
                     },
@@ -538,14 +568,27 @@ impl EditorApp {
         let target = self
             .ed(|e| {
                 let door = *e.room().doors().get(e.selected_door?)?;
-                Some((door, e.room_count()))
+                Some((door, e.destination(&door), e.room_count()))
             })
             .flatten();
-        let Some((door, count)) = target else {
+        let Some((door, destination, count)) = target else {
             self.say("Select a door first");
             return;
         };
-        let dest = door.dest_room as usize;
+        let dest = match destination {
+            Some(Destination::Room(room)) => room,
+            Some(Destination::LevelExit) => {
+                self.say("This is the stage's goal door: it leaves the level");
+                return;
+            }
+            Some(Destination::Special(v)) => {
+                self.say(&format!(
+                    "Destination {v:04X} is a special value, not a room"
+                ));
+                return;
+            }
+            None => door.dest_room as usize,
+        };
         if dest >= count {
             self.say(&format!(
                 "Door leads to room {dest}, which does not exist ({count} rooms)"
@@ -565,6 +608,92 @@ impl EditorApp {
             Some(Err(e)) => self.say(&format!("Could not load room {dest}: {e}")),
             None => {}
         }
+    }
+
+    /// The room position at the middle of the visible part of the map.
+    fn view_centre(&self) -> (i32, i32) {
+        let map = self.h.map.get();
+        let v = map.view();
+        let view = v.scroller.view();
+        v.to_room(view.width() / 2, view.height() / 2)
+    }
+
+    fn add_door(&mut self, warp: bool) {
+        let pos = self.view_centre();
+        let added = self
+            .ed_mut(|e| {
+                if warp {
+                    e.add_warp(pos.0, pos.1)
+                } else {
+                    e.add_door(pos.0, pos.1)
+                }
+            })
+            .flatten();
+        match added {
+            Some(index) => {
+                self.after_edit();
+                self.say(&if warp {
+                    format!("Added warp star and door {index}: set where it leads")
+                } else {
+                    format!("Added door {index} with its door star: set where it leads")
+                });
+            }
+            None => self.say("Could not add a door to this room"),
+        }
+    }
+
+    /// Shows the chest of the picked treasure: its room, centred, selected.
+    fn select_treasure(&mut self, row: usize) {
+        let Some(&number) = self.treasure_rows.get(row) else {
+            return;
+        };
+        self.treasure = Some(number);
+        let spot = self
+            .ed(|e| e.chests().into_iter().find(|c| c.treasure == number))
+            .flatten();
+        let Some(spot) = spot else {
+            self.refresh_treasures();
+            return;
+        };
+        match self.ed_mut(|e| e.select_room(spot.room)) {
+            Some(Ok(())) => {
+                self.room_changed();
+                self.ed_mut(|e| {
+                    e.selected_object = Some(spot.object);
+                    e.selected_door = None;
+                });
+                self.h
+                    .map
+                    .get()
+                    .update_view(|v| v.center_on((spot.x as i32, spot.y as i32)));
+                self.refresh_objects();
+                self.refresh_status();
+                self.h.map.get().invalidate();
+            }
+            Some(Err(e)) => self.say(&format!("Could not load room {}: {e}", spot.room)),
+            None => {}
+        }
+    }
+
+    /// Arms the Object tool with a chest of the picked treasure.
+    fn place_treasure(&mut self) {
+        let Some(number) = self.treasure else {
+            self.say("Pick a treasure in the list first");
+            return;
+        };
+        self.ed_mut(|e| e.new_object = (TREASURE_CHEST, number));
+        self.set_tool(Tool::AddObject);
+        self.refresh_objects();
+        let in_cave = self
+            .ed(|e| e.cave_rooms().contains(&e.current_index()))
+            .unwrap_or(false);
+        self.say(&if in_cave {
+            format!("Click on the map to place a chest of treasure {number}")
+        } else {
+            format!(
+                "Click on the map to place a chest of treasure {number} (chests are only counted in the cave's rooms)"
+            )
+        });
     }
 
     fn resize_room(&mut self) {
@@ -685,10 +814,7 @@ impl App for EditorApp {
             }
             Msg::ObjectAdd => {
                 // Place it in the middle of what is visible.
-                let map = self.h.map.get();
-                let v = map.view();
-                let view = v.scroller.view();
-                let pos = v.to_room(view.width() / 2, view.height() / 2);
+                let pos = self.view_centre();
                 self.ed_mut(|e| e.add_object(pos.0, pos.1));
                 self.after_edit();
                 self.select_object_row();
@@ -711,6 +837,21 @@ impl App for EditorApp {
             }
             Msg::DoorField(field, value) => self.door_field(field, value),
             Msg::DoorGoto => self.goto_door_destination(),
+            Msg::DoorAdd => self.add_door(false),
+            Msg::WarpAdd => self.add_door(true),
+            Msg::DoorDelete => {
+                let removed = self
+                    .ed_mut(|e| e.selected_door.is_some_and(|i| e.remove_door(i)))
+                    .unwrap_or(false);
+                if removed {
+                    self.after_edit();
+                    self.say("Door deleted");
+                } else {
+                    self.say("Select a door first");
+                }
+            }
+            Msg::TreasureSelect(row) => self.select_treasure(row),
+            Msg::TreasurePlace => self.place_treasure(),
             Msg::Music(value) => {
                 if self
                     .ed_mut(|e| e.set_music(value.round().clamp(0.0, 255.0) as u8))

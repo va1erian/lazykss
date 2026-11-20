@@ -2,14 +2,18 @@
 //!
 //! ```text
 //! patch_room <out.sfc> <room> [tile X Y ID]... [object ID VARIANT X Y]...
-//!            [block X Y AFTER EXTRA]... [clear-objects] [slots HEX8] [raw OFFSET HEX] [noise]
+//!            [block X Y AFTER EXTRA]... [door DEST X Y DEST_X DEST_Y]...
+//!            [clear-doors] [clear-objects] [slots HEX8] [raw OFFSET HEX] [noise]
 //! ```
+//!
+//! `door` appends a door record (`DEST` counts from the level's first room);
+//! `clear-doors` empties the list.
 //!
 //! `slots` replaces the four object-graphics slot bytes of the graphics
 //! header; `noise` fills the unused right part of the map with
 //! incompressible tiles so the room has to move to free space.
 
-use kss_core::{Block, Object, Rom, Room, Tables};
+use kss_core::{Block, Door, Object, Rom, Room, Tables};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -57,6 +61,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
                 room.set_blocks(&blocks);
                 at += 5;
+            }
+            "door" => {
+                let n = |i: usize| number(&args[at + i]).map(|v| v as u16);
+                let door = Door {
+                    dest_room: n(1)?,
+                    x: n(2)?,
+                    y: n(3)?,
+                    dest_x: n(4)?,
+                    dest_y: n(5)?,
+                };
+                let count = room.doors().len();
+                room.insert_door(count, door);
+                at += 6;
+            }
+            "clear-doors" => {
+                room.set_doors(&[]);
+                at += 1;
             }
             "clear-objects" => {
                 room.objects.clear();

@@ -487,3 +487,78 @@ fn open_dialog_and_the_empty_state() {
         mouse_up(s, (600, 300), MouseButton::Left);
     });
 }
+
+const TAB_TREASURES: (i32, i32) = (1293, 88);
+
+#[test]
+fn treasure_list_opens_the_room_of_a_chest() {
+    shoot("treasures", Theme::light(), |s, editor, log| {
+        s.click(TAB_TREASURES.0, TAB_TREASURES.1);
+        // Row 1 is treasure 1, the Gold Coin, in room 80.
+        s.emit(Msg::TreasureSelect(1));
+        {
+            let e = editor.borrow();
+            let e = e.as_ref().unwrap();
+            check(log, e.current_index() == 80, "the chest's room is open");
+            let selected = e.selected_object.map(|i| e.room().objects[i]);
+            check(
+                log,
+                selected.is_some_and(|o| o.id == 0xB8 && o.variant == 1),
+                "the chest is selected",
+            );
+        }
+        // Placing a missing treasure arms the Object tool with its chest.
+        s.emit(Msg::TreasureSelect(16));
+        s.emit(Msg::TreasurePlace);
+        let e = editor.borrow();
+        let e = e.as_ref().unwrap();
+        check(log, e.tool == Tool::AddObject, "the Object tool is on");
+        check(log, e.new_object == (0xB8, 16), "with treasure 16's chest");
+    });
+}
+
+#[test]
+fn cave_doors_count_from_the_level_and_can_be_added() {
+    shoot("cave-doors", Theme::dark(), |s, editor, log| {
+        // Room 74 (the cave's third room): door 0 is stored as 8, room 80.
+        s.emit(Msg::TreasureSelect(2));
+        s.click(TAB_DOORS.0, TAB_DOORS.1);
+        s.emit(Msg::DoorSelect(0));
+        let door = |e: &SharedEditor| e.borrow().as_ref().unwrap().room().doors()[0];
+        check(
+            log,
+            editor.borrow().as_ref().unwrap().current_index() == 74,
+            "room 74 is open",
+        );
+        check(log, door(editor).dest_room == 8, "door 0 is stored as 8");
+        // Setting "To room" stores the level-relative value.
+        s.emit(Msg::DoorField(kss_editor::ui::DoorField::DestRoom, 75.0));
+        check(log, door(editor).dest_room == 3, "room 75 is stored as 3");
+        let before = editor.borrow().as_ref().unwrap().room().doors().len();
+        s.emit(Msg::DoorAdd);
+        s.emit(Msg::WarpAdd);
+        {
+            let e = editor.borrow();
+            let e = e.as_ref().unwrap();
+            check(
+                log,
+                e.room().doors().len() == before + 2,
+                "a door and a warp were added",
+            );
+            check(
+                log,
+                e.warps_of(before + 1).len() == 1,
+                "the warp star uses the new door record",
+            );
+        }
+        s.emit(Msg::DoorSelect(0));
+        s.emit(Msg::DoorGoto);
+        check(
+            log,
+            editor.borrow().as_ref().unwrap().current_index() == 75,
+            "Go to destination follows the level-relative value",
+        );
+        // Show a selected door in the capture.
+        s.emit(Msg::DoorSelect(1));
+    });
+}
