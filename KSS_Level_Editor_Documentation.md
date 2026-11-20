@@ -234,11 +234,13 @@ any.
 
 ## 9. Tools used to establish this
 
-A headless harness (Python `ctypes` over a libretro bsnes core) boots the
-ROM, replays the inputs that lead into Green Greens, and reads WRAM, VRAM,
-OAM and screenshots. `cargo run -p kss-core --example patch_room` produces
-the patched ROMs it runs, and `--example render_room` writes room renders
-for comparison. The harness itself is not part of the repository.
+`tools/harness/` is a headless emulator for scripts (Python `ctypes` over a
+libretro bsnes core): it boots a ROM, replays the inputs that lead into Green
+Greens, and reads WRAM, VRAM, OAM, the palette and screenshots.
+[docs/emulator-harness.md](docs/emulator-harness.md) explains how to use it
+and how each `[emu]` statement here was obtained. `cargo run -p kss-core
+--example patch_room` produces the patched ROMs it runs, and `--example
+render_room` writes room renders for comparison.
 
 ## 10. Sources
 

@@ -19,6 +19,8 @@ earlier session: it writes `<name> (edited).sfc` next to the ROM, or
 - [KSS_Level_Editor_Documentation.md](KSS_Level_Editor_Documentation.md) —
   the data formats, and how each statement was verified.
 - [agent.md](agent.md) — repository layout and the rules for changes.
+- [docs/emulator-harness.md](docs/emulator-harness.md) — the scripted
+  emulator used to work the formats out, and how to use it.
 
 The GUI is built on [xui](https://github.com/va1erian/xui).
 

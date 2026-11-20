@@ -5,6 +5,7 @@
 //! Built by placing each object in Green Greens room 1, running the game in
 //! an emulator, and tracing the characters it put in OAM back to the
 //! compressed graphics packages they were loaded from.
+//! Regenerate with `python tools/harness/sprites.py`.
 
 /// A compressed stream of 4bpp characters: file offset, and the byte offset
 /// of character 0 in the decompressed data (161 for an object graphics
