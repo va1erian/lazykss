@@ -15,6 +15,8 @@ first version covers the four stages of Spring Breeze.
   types; `ui/` holds the window, the custom-painted map and tile picker.
 - `KSS_Level_Editor_Documentation.md` — the data formats, with what was
   verified and how. Read it before touching `kss-core`.
+- `tools/harness/` and `docs/emulator-harness.md` — a scripted, headless
+  emulator and the method for answering questions about the game with it.
 
 ## Running
 
@@ -37,8 +39,11 @@ unless Save As picks another path.
 2. Check UI changes headlessly: `XUI_LAYOUT_REPORT=1 XUI_SNAPSHOT=target/shots
    cargo run -p kss-editor` writes light and dark PNGs and must report
    `XUI_LAYOUT_WARNINGS:0`. Look at the PNGs.
-3. `kss-core/src/sprite_table.rs` was generated from emulator captures
-   (documentation §6) by a harness that is not in this repository. Extend it
-   the same way rather than by guessing addresses.
+3. `kss-core/src/sprite_table.rs` is generated: `python tools/harness/sprites.py`
+   rewrites it from the running game. Do not edit it by hand or guess
+   addresses.
 4. A change to the save pipeline is not done until a saved ROM has been
-   booted in an SA-1-accurate emulator.
+   booted: see [docs/emulator-harness.md](docs/emulator-harness.md), "does a
+   saved ROM still work?".
+5. When the ROM bytes can be read two ways, run the game and look. That
+   guide explains how, step by step, and lists the mistakes already made.
