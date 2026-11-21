@@ -7,6 +7,9 @@ use crate::editor::Tool;
 
 /// Window-wide shortcuts (Ctrl combinations).
 pub fn shortcut(key: Key, mods: Modifiers) -> Option<Msg> {
+    if key == Key::F1 && mods == Modifiers::NONE {
+        return Some(Msg::ShowGuide);
+    }
     if !mods.ctrl || mods.alt {
         return None;
     }
@@ -92,6 +95,10 @@ mod tests {
             Some(Msg::SaveAs)
         ));
         assert!(shortcut(Key::Z, Modifiers::NONE).is_none());
+        assert!(matches!(
+            shortcut(Key::F1, Modifiers::NONE),
+            Some(Msg::ShowGuide)
+        ));
     }
 
     #[test]
