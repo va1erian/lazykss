@@ -141,7 +141,7 @@ impl Settings {
 
     pub fn save(&self) -> std::io::Result<()> {
         let Some(path) = Self::path() else {
-            return Ok(());
+            return Err(std::io::Error::other("no config folder found"));
         };
         self.save_to(&path)
     }

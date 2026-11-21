@@ -1,6 +1,8 @@
 //! The settings window: theme and animations. It runs modally as its own
 //! small app and hands the chosen [`Settings`] back when OK is pressed.
 
+use std::sync::OnceLock;
+
 use xui::backend::PlatformSpec;
 use xui::prelude::*;
 use xui::widget::ComboBox;
@@ -33,7 +35,7 @@ impl App for SettingsApp {
     }
 }
 
-/// The toolkit theme a choice stands for; `None` keeps the platform's own.
+/// The toolkit theme a choice stands for; `None` is the platform's own.
 fn theme_of(choice: ThemeChoice) -> Option<Theme> {
     Some(match choice {
         ThemeChoice::System => return None,
@@ -45,11 +47,14 @@ fn theme_of(choice: ThemeChoice) -> Option<Theme> {
     })
 }
 
+/// The theme the window started with, taken on the first `apply` (at startup,
+/// before any choice), so "System default" can be restored later.
+static PLATFORM_THEME: OnceLock<Theme> = OnceLock::new();
+
 /// Applies `settings` to the window `ui` drives.
 pub fn apply<M: 'static>(ui: &Ui<M>, settings: &Settings) {
-    if let Some(theme) = theme_of(settings.theme) {
-        ui.set_theme(theme);
-    }
+    let platform = *PLATFORM_THEME.get_or_init(|| ui.theme());
+    ui.set_theme(theme_of(settings.theme).unwrap_or(platform));
     ui.set_animations(settings.animations);
 }
 
