@@ -6,6 +6,7 @@ use std::rc::Rc;
 use xui::Lucide;
 use xui::prelude::*;
 use xui::widget::FileDialog;
+use xui::xui_markdown::MarkdownView;
 
 use super::SharedEditor;
 use super::app::{DoorField, EditorApp, Handles, Layer, Msg, ObjField};
@@ -23,6 +24,13 @@ const UNDO: MenuId = MenuId::new(10);
 const REDO: MenuId = MenuId::new(11);
 const ZOOM_IN: MenuId = MenuId::new(20);
 const ZOOM_OUT: MenuId = MenuId::new(21);
+const GUIDE: MenuId = MenuId::new(30);
+
+/// The user guide the Help tab shows.
+const GUIDE_TEXT: &str = include_str!("../guide.md");
+
+/// The Help tab's position in the side panel.
+pub const HELP_TAB: usize = 5;
 
 fn menu_message(id: MenuId) -> Option<Msg> {
     Some(match id {
@@ -34,6 +42,7 @@ fn menu_message(id: MenuId) -> Option<Msg> {
         REDO => Msg::Redo,
         ZOOM_IN => Msg::ZoomIn,
         ZOOM_OUT => Msg::ZoomOut,
+        GUIDE => Msg::ShowGuide,
         _ => return None,
     })
 }
@@ -54,6 +63,9 @@ fn menu() -> Build<Menu<Msg>, Msg> {
         m.submenu(MenuId::new(102), "&View", |v| {
             v.item(ZOOM_IN, "Zoom &in");
             v.item(ZOOM_OUT, "Zoom &out");
+        });
+        m.submenu(MenuId::new(103), "&Help", |h| {
+            h.item(GUIDE, "&User guide    F1");
         });
     })
     .on_select_with(menu_message)
@@ -318,6 +330,16 @@ fn room_tab(h: &Handles) -> Layout<Msg> {
     ))
 }
 
+/// The user guide, read-only. Links to its own headings scroll the view;
+/// it has no other links to follow.
+fn help_tab(h: &Handles) -> Layout<Msg> {
+    column().children((build(
+        |ui| Ok(MarkdownView::new(ui, Rect::default())?.markdown(GUIDE_TEXT)),
+    )
+    .bind(&h.guide)
+    .fill(1),))
+}
+
 /// Builds the window and returns the app, with the first room open.
 pub fn create(ui: &mut Ui<Msg>, rom: Option<PathBuf>, editor: SharedEditor) -> Result<EditorApp> {
     let h = Handles::default();
@@ -345,6 +367,7 @@ pub fn create(ui: &mut Ui<Msg>, rom: Option<PathBuf>, editor: SharedEditor) -> R
                         .page("Doors", doors_tab(&h))
                         .page("Room", room_tab(&h))
                         .page("Treasures", treasures_tab(&h))
+                        .page("Help", help_tab(&h))
                         .bind(&h.tabs)
                         .width(350),
                 ))
@@ -371,6 +394,13 @@ pub fn create(ui: &mut Ui<Msg>, rom: Option<PathBuf>, editor: SharedEditor) -> R
 }
 
 impl EditorApp {
+    /// Shows the Help tab with the keyboard focus in the guide, so it
+    /// scrolls with the keys.
+    pub(super) fn show_guide(&mut self) {
+        self.h.tabs.get().select(HELP_TAB);
+        self.h.guide.get().focus();
+    }
+
     /// Opens the ROM from the command line or the usual place; with none, the
     /// window stays in its empty state.
     fn start(&mut self, rom: Option<PathBuf>) {

@@ -2,10 +2,11 @@
 
 mod common;
 
-use common::{TAB_DOORS, TAB_OBJECTS, TAB_ROOM, TAB_TREASURES, check, shoot};
+use common::{TAB_DOORS, TAB_OBJECTS, TAB_ROOM, TAB_TREASURES, check, key, shoot};
 use kss_editor::editor::Tool;
 use kss_editor::ui::{DoorField, Msg, SharedEditor};
 use xui::Theme;
+use xui::prelude::{Key, Modifiers};
 
 #[test]
 fn side_panel_tabs() {
@@ -27,6 +28,15 @@ fn side_panel_tabs() {
                     "list selection reaches the editor",
                 );
             }
+        });
+    }
+}
+
+#[test]
+fn f1_shows_the_guide() {
+    for theme in [Theme::light(), Theme::dark()] {
+        shoot("tab-help", theme, |s, _, _| {
+            key(s, Key::F1, Modifiers::NONE);
         });
     }
 }

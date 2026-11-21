@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use xui::prelude::*;
 use xui::widget::FileDialog;
+use xui::xui_markdown::MarkdownView;
 
 use super::map::{MapEvent, MapView};
 use super::picker::TilePicker;
@@ -55,6 +56,8 @@ pub enum Msg {
     Layer(Layer),
     ZoomIn,
     ZoomOut,
+    /// Shows the user guide (the Help tab).
+    ShowGuide,
     // browser, map, picker
     BrowserSelect(usize),
     BrowserToggle(usize, bool),
@@ -141,6 +144,7 @@ pub struct Handles {
     pub music_name: Handle<Label<Msg>>,
     pub size_fields: [Handle<NumberField<Msg>>; 2],
     pub head: Handle<ListView<Msg>>,
+    pub guide: Handle<MarkdownView<Msg>>,
 }
 
 pub struct EditorApp {
@@ -255,6 +259,7 @@ impl App for EditorApp {
             Msg::Layer(layer) => self.toggle_layer(layer),
             Msg::ZoomIn => self.zoom_by(1),
             Msg::ZoomOut => self.zoom_by(-1),
+            Msg::ShowGuide => self.show_guide(),
             Msg::BrowserSelect(id) => self.browser_select(id),
             Msg::BrowserToggle(id, open) => self.browser_toggle(id, open),
             Msg::Map(event) => self.map_event(event),
