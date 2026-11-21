@@ -18,7 +18,8 @@ workspace = true
 
 [dependencies]
 kss-core = { path = "../kss-core" }
-xui = { git = "https://github.com/va1erian/xui" }
+# `markdown` adds the read-only Markdown view the Help tab shows.
+xui = { git = "https://github.com/va1erian/xui", features = ["markdown"] }
 
 # Windows draws with Direct2D; other platforms use xui's software backend.
 [target.'cfg(windows)'.dependencies]
