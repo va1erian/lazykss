@@ -14,8 +14,36 @@
 //! incompressible tiles so the room has to move to free space.
 
 use kss_core::{Block, Door, Object, Rom, Room, Tables};
+use std::error::Error;
+use std::slice::Iter;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
+/// The next argument of `edit`.
+fn text<'a>(args: &mut Iter<'a, String>, edit: &str) -> Result<&'a str> {
+    Ok(args
+        .next()
+        .ok_or_else(|| format!("{edit}: missing argument"))?)
+}
+
+/// The next argument of `edit` as a number, decimal or `0x` hex.
+fn number(args: &mut Iter<'_, String>, edit: &str) -> Result<usize> {
+    let s = text(args, edit)?;
+    Ok(match s.strip_prefix("0x") {
+        Some(hex) => usize::from_str_radix(hex, 16)?,
+        None => s.parse()?,
+    })
+}
+
+/// Bytes written as hex digit pairs; a trailing odd digit is ignored.
+fn hex_bytes(hex: &str) -> Result<Vec<u8>> {
+    hex.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| Ok(u8::from_str_radix(std::str::from_utf8(pair)?, 16)?))
+        .collect()
+}
+
+fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let usage = "usage: patch_room <out.sfc> <room> [edits...]";
     let out = std::path::PathBuf::from(args.first().ok_or(usage)?);
@@ -23,83 +51,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rom = Rom::load(&Rom::locate().ok_or("ROM not found (set KSS_ROM)")?)?;
     let mut tables = Tables::load(&rom);
     let mut room = Room::load(&rom, &tables, index)?;
-    let number = |s: &String| -> Result<usize, std::num::ParseIntError> {
-        match s.strip_prefix("0x") {
-            Some(hex) => usize::from_str_radix(hex, 16),
-            None => s.parse(),
-        }
-    };
-    let mut at = 2;
-    while at < args.len() {
-        match args[at].as_str() {
+    let mut rest = args.get(2..).unwrap_or_default().iter();
+    while let Some(edit) = rest.next() {
+        let args = &mut rest;
+        match edit.as_str() {
             "tile" => {
                 let (x, y, id) = (
-                    number(&args[at + 1])?,
-                    number(&args[at + 2])?,
-                    number(&args[at + 3])?,
+                    number(args, edit)?,
+                    number(args, edit)?,
+                    number(args, edit)?,
                 );
                 room.set_tile(x, y, id as u16);
-                at += 4;
             }
             "object" => {
                 room.objects.push(Object {
-                    id: number(&args[at + 1])? as u8,
-                    variant: number(&args[at + 2])? as u8,
-                    x: number(&args[at + 3])? as u16,
-                    y: number(&args[at + 4])? as u16,
+                    id: number(args, edit)? as u8,
+                    variant: number(args, edit)? as u8,
+                    x: number(args, edit)? as u16,
+                    y: number(args, edit)? as u16,
                 });
-                at += 5;
             }
             "block" => {
                 // block X Y AFTER EXTRA: make the cell breakable.
                 let mut blocks = room.blocks();
                 blocks.push(Block {
-                    x: number(&args[at + 1])?,
-                    y: number(&args[at + 2])?,
-                    after: number(&args[at + 3])? as u16,
-                    extra: number(&args[at + 4])? as u16,
+                    x: number(args, edit)?,
+                    y: number(args, edit)?,
+                    after: number(args, edit)? as u16,
+                    extra: number(args, edit)? as u16,
                 });
                 room.set_blocks(&blocks);
-                at += 5;
             }
             "door" => {
-                let n = |i: usize| number(&args[at + i]).map(|v| v as u16);
+                let mut n = || number(args, edit).map(|v| v as u16);
                 let door = Door {
-                    dest_room: n(1)?,
-                    x: n(2)?,
-                    y: n(3)?,
-                    dest_x: n(4)?,
-                    dest_y: n(5)?,
+                    dest_room: n()?,
+                    x: n()?,
+                    y: n()?,
+                    dest_x: n()?,
+                    dest_y: n()?,
                 };
                 let count = room.doors().len();
                 if !room.insert_door(count, door) {
                     return Err(format!("door {door:?} cannot be added").into());
                 }
-                at += 6;
             }
-            "clear-doors" => {
-                room.set_doors(&[]);
-                at += 1;
-            }
-            "clear-objects" => {
-                room.objects.clear();
-                at += 1;
-            }
+            "clear-doors" => room.set_doors(&[]),
+            "clear-objects" => room.objects.clear(),
             "slots" => {
-                let value = u32::from_str_radix(&args[at + 1], 16)?;
+                let value = u32::from_str_radix(text(args, edit)?, 16)?;
                 let mut header = room.gfx_header();
                 header[20..24].copy_from_slice(&value.to_be_bytes());
                 room.set_gfx_header(header);
-                at += 2;
             }
             "raw" => {
                 // raw OFFSET HEXBYTES: overwrite header bytes of the room block.
-                let offset = number(&args[at + 1])?;
-                let bytes: Vec<u8> = (0..args[at + 2].len() / 2)
-                    .map(|i| u8::from_str_radix(&args[at + 2][i * 2..i * 2 + 2], 16))
-                    .collect::<Result<_, _>>()?;
+                let offset = number(args, edit)?;
+                let bytes = hex_bytes(text(args, edit)?)?;
                 room.patch_head(offset, &bytes);
-                at += 3;
             }
             "noise" => {
                 let mut seed = 99u32;
@@ -109,7 +118,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         room.set_tile(x, y, 1 + (seed >> 16) as u16 % 200);
                     }
                 }
-                at += 1;
             }
             other => return Err(format!("unknown edit {other:?}").into()),
         }

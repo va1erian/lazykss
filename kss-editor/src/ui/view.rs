@@ -46,22 +46,31 @@ impl ViewState {
 
     /// Tells the view how big the room is; recomputes the scroll range.
     pub fn set_room(&mut self, width: usize, height: usize) {
-        self.room_cells = (width as i32, height as i32);
+        let cells = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
+        self.room_cells = (cells(width), cells(height));
         self.sync_content();
     }
 
+    // The sizes come from the ROM and the offsets from the pointer: the maths
+    // below saturates rather than trust either to stay small.
+
     fn sync_content(&mut self) {
-        let cell = CELL as i32 * self.zoom;
-        self.scroller.content = (self.room_cells.0 * cell, self.room_cells.1 * cell);
+        let cell = (CELL as i32).saturating_mul(self.zoom);
+        self.scroller.content = (
+            self.room_cells.0.saturating_mul(cell),
+            self.room_cells.1.saturating_mul(cell),
+        );
         self.scroller.clamp();
     }
 
     /// The room pixel under a point of the node (may lie outside the room).
     pub fn to_room(&self, x: i32, y: i32) -> (i32, i32) {
         let (ox, oy) = self.scroller.offset;
+        // `set_zoom` keeps the zoom at least 1; `max` only guards the division.
+        let zoom = self.zoom.max(MIN_ZOOM);
         (
-            (x + ox).div_euclid(self.zoom),
-            (y + oy).div_euclid(self.zoom),
+            x.saturating_add(ox).div_euclid(zoom),
+            y.saturating_add(oy).div_euclid(zoom),
         )
     }
 
@@ -73,8 +82,12 @@ impl ViewState {
     /// The node point a room pixel is drawn at.
     pub fn to_screen(&self, pos: (i32, i32)) -> (i32, i32) {
         (
-            pos.0 * self.zoom - self.scroller.offset.0,
-            pos.1 * self.zoom - self.scroller.offset.1,
+            pos.0
+                .saturating_mul(self.zoom)
+                .saturating_sub(self.scroller.offset.0),
+            pos.1
+                .saturating_mul(self.zoom)
+                .saturating_sub(self.scroller.offset.1),
         )
     }
 
@@ -88,7 +101,10 @@ impl ViewState {
         let (rx, ry) = self.to_room(anchor.0, anchor.1);
         self.zoom = zoom;
         self.sync_content();
-        self.scroller.offset = (rx * zoom - anchor.0, ry * zoom - anchor.1);
+        self.scroller.offset = (
+            rx.saturating_mul(zoom).saturating_sub(anchor.0),
+            ry.saturating_mul(zoom).saturating_sub(anchor.1),
+        );
         self.scroller.clamp();
         true
     }
@@ -103,8 +119,12 @@ impl ViewState {
     pub fn center_on(&mut self, pos: (i32, i32)) {
         let view = self.scroller.view();
         self.scroller.offset = (
-            pos.0 * self.zoom - view.width() / 2,
-            pos.1 * self.zoom - view.height() / 2,
+            pos.0
+                .saturating_mul(self.zoom)
+                .saturating_sub(view.width() / 2),
+            pos.1
+                .saturating_mul(self.zoom)
+                .saturating_sub(view.height() / 2),
         );
         self.scroller.clamp();
     }

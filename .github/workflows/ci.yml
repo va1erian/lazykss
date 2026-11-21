@@ -69,6 +69,13 @@ jobs:
           path: target/shots/
           if-no-files-found: warn
 
+  # Every hand-written .rs/.py file stays under 500 lines (agent.md).
+  file-length:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/check_file_length.py
+
   # A ROM must never be committed: fail if a tracked file looks like one.
   no-rom:
     runs-on: ubuntu-latest

@@ -68,8 +68,8 @@ impl Scroller {
     pub fn max_offset(&self) -> (i32, i32) {
         let view = self.view();
         (
-            (self.content.0 - view.width()).max(0),
-            (self.content.1 - view.height()).max(0),
+            self.content.0.saturating_sub(view.width()).max(0),
+            self.content.1.saturating_sub(view.height()).max(0),
         )
     }
 
@@ -79,7 +79,10 @@ impl Scroller {
     }
 
     pub fn scroll_by(&mut self, dx: i32, dy: i32) {
-        self.offset = (self.offset.0 + dx, self.offset.1 + dy);
+        self.offset = (
+            self.offset.0.saturating_add(dx),
+            self.offset.1.saturating_add(dy),
+        );
         self.clamp();
     }
 

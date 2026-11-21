@@ -95,7 +95,7 @@ fn paint_room(
     }
 
     if view.grid {
-        paint_grid(canvas, view, room.width, room.height, area);
+        paint_grid(canvas, view, area);
     }
     if view.doors {
         paint_doors(canvas, editor, view, theme);
@@ -109,18 +109,26 @@ fn paint_room(
     view.scroller.paint(canvas, theme);
 }
 
-fn paint_grid(canvas: &mut dyn Canvas, view: &ViewState, width: usize, height: usize, area: Rect) {
-    let cell = CELL as i32 * view.zoom;
+/// The cell grid over the visible part of the room (its size in cells is
+/// `view.room_cells`, the content size `view.scroller.content`).
+fn paint_grid(canvas: &mut dyn Canvas, view: &ViewState, area: Rect) {
+    // At least 1: the zoom is, and a cell is not empty.
+    let cell = (CELL as i32).saturating_mul(view.zoom).max(1);
     let line = Rgba::with_alpha(255, 255, 255, 70);
     let (ox, oy) = view.scroller.offset;
-    let (w, h) = (width as i32 * cell, height as i32 * cell);
-    for i in (ox / cell)..=((ox + area.width()) / cell).min(width as i32) {
-        let x = i * cell - ox;
-        canvas.fill_rect_rgba(Rect::new(x, 0, x + 1, (h - oy).min(area.bottom)), line);
+    let (w, h) = view.scroller.content;
+    let (width, height) = view.room_cells;
+    let last_column = (ox.saturating_add(area.width()) / cell).min(width);
+    for i in (ox / cell)..=last_column {
+        let x = i.saturating_mul(cell).saturating_sub(ox);
+        let bottom = h.saturating_sub(oy).min(area.bottom);
+        canvas.fill_rect_rgba(Rect::new(x, 0, x.saturating_add(1), bottom), line);
     }
-    for j in (oy / cell)..=((oy + area.height()) / cell).min(height as i32) {
-        let y = j * cell - oy;
-        canvas.fill_rect_rgba(Rect::new(0, y, (w - ox).min(area.right), y + 1), line);
+    let last_row = (oy.saturating_add(area.height()) / cell).min(height);
+    for j in (oy / cell)..=last_row {
+        let y = j.saturating_mul(cell).saturating_sub(oy);
+        let right = w.saturating_sub(ox).min(area.right);
+        canvas.fill_rect_rgba(Rect::new(0, y, right, y.saturating_add(1)), line);
     }
 }
 

@@ -1,0 +1,6 @@
+# Tests may unwrap, index and panic: a failing assertion is how they report.
+# Everything else must not (see the `[workspace.lints.clippy]` table).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

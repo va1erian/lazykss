@@ -38,7 +38,10 @@ impl MapSnapshot {
 
     /// The tile at a cell, `None` outside the map.
     pub fn tile(&self, x: usize, y: usize) -> Option<u16> {
-        (x < self.width && y < self.height).then(|| self.tiles[y * self.width + x])
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        self.tiles.get(y * self.width + x).copied()
     }
 
     fn restore(&self, room: &mut Room) {
@@ -46,6 +49,14 @@ impl MapSnapshot {
         room.height = self.height;
         room.tiles = self.tiles.clone();
         room.set_blocks(&self.blocks);
+    }
+}
+
+/// Sets one tile of `room`. An index past the map is left alone: the change
+/// was recorded for another map size, and there is no cell to write.
+fn set_cell(room: &mut Room, index: usize, tile: u16) {
+    if let Some(slot) = room.tiles.get_mut(index) {
+        *slot = tile;
     }
 }
 
@@ -110,7 +121,7 @@ impl Change {
         match self {
             Change::Tiles(cells) => {
                 for c in cells {
-                    room.tiles[c.index] = c.new;
+                    set_cell(room, c.index, c.new);
                 }
             }
             Change::AddObject { index, object } => room
@@ -144,7 +155,7 @@ impl Change {
         match self {
             Change::Tiles(cells) => {
                 for c in cells.iter().rev() {
-                    room.tiles[c.index] = c.old;
+                    set_cell(room, c.index, c.old);
                 }
             }
             Change::AddObject { index, .. } => {
