@@ -1,7 +1,9 @@
 # lazykss
 
-A level editor for *Kirby Super Star* (SNES, US release). It covers the four
-stages of Spring Breeze and The Great Cave Offensive: it shows each room as
+A level editor for *Kirby Super Star* (SNES, US release). It covers every
+sub-game played through rooms (Spring Breeze, Dyna Blade, Gourmet Race, The
+Great Cave Offensive, Revenge of Meta Knight, Milky Way Wishes and The
+Arena), grouped by sub-game and level: it shows each room as
 the game draws it, with its tiles, background and object sprites decoded from
 your ROM, and lets you paint tiles, place and move objects, add, edit and
 delete doors and warp stars, place the cave's treasure chests (the Treasures

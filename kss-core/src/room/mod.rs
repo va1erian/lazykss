@@ -38,19 +38,23 @@ mod error;
 mod load;
 mod objects;
 mod save;
+mod subgames;
 mod tables;
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_edit;
+#[cfg(test)]
+mod tests_subgames;
 
 pub use blocks::Block;
 pub use doors::{Destination, Door};
 pub use error::RoomError;
 pub use objects::Object;
 pub use save::{SaveReport, free_space};
-pub use tables::{GREAT_CAVE_OFFENSIVE, Level, NAMED_LEVELS, SPRING_BREEZE_LEVELS, Tables};
+pub use subgames::{FIRST_UNPLAYED_LEVEL, SubGame};
+pub use tables::{GREAT_CAVE_OFFENSIVE, Level, Tables};
 
 /// Pixel size of one map cell.
 pub const CELL: usize = 24;

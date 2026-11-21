@@ -29,9 +29,18 @@ impl EditorApp {
     }
 
     pub(super) fn browser_toggle(&mut self, id: usize, open: bool) {
-        let group = self.tree_nodes.get(id).copied().and_then(tree::group_index);
-        if let Some(flag) = group.and_then(|g| self.expanded.get_mut(g)) {
-            *flag = open;
+        let Some(node) = self
+            .tree_nodes
+            .get(id)
+            .copied()
+            .filter(|&n| tree::is_group(n))
+        else {
+            return;
+        };
+        if open {
+            self.expanded.insert(node);
+        } else {
+            self.expanded.remove(&node);
         }
     }
 
@@ -119,11 +128,7 @@ impl EditorApp {
                 let new = match field {
                     DoorField::DestRoom => {
                         // Stored relative to the level's first room.
-                        let level = e.level()?;
-                        Door {
-                            dest_room: Door::relative_to(level, value.into())?,
-                            ..d
-                        }
+                        d.retargeted(e.level()?, value.into())?
                     }
                     DoorField::Raw => Door {
                         dest_room: value,

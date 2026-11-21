@@ -42,24 +42,70 @@ the decoded tile map of the current room at `7F:0000` (16-bit ids,
 | 2 | `089C` | End of the resource table (another pointer table follows) |
 | 6 | `0022` | Level table: 60 words, each the address of a level's first room pointer |
 
-Levels 0-3 are Spring Breeze: Green Greens (rooms 0-5), Float Islands
-(6-14), Bubbly Clouds (15-23), Mt. Dedede (24-26) **[rom]**. The first room
-of each stage is its title card.
+A level is a run of consecutive rooms; a level's room range ends where the
+next level's begins. The level table does not say which sub-game a level
+belongs to: §2a does.
 
-Level 15 is The Great Cave Offensive: one level of 81 rooms (72-152), the
-only one holding treasure chests (§6a) **[rom]**. A level's room range ends
-where the next level's begins.
+## 2a. Sub-games and their levels
+
+Levels 0-35 belong to the seven sub-games played through rooms; levels 36-59
+are cut-scene, guide and dummy rooms. The room ranges are **[rom]**. Byte 0 of
+every room block of a sub-game holds the same value (column "Byte 0"; the
+`kss-core` tests check every room), but the game ignores it: room 1 with
+byte 0 set to 01-06, 0A or FF, and the first room of four sub-games set to 00
+and 0A, played with identical screens and identical BW-RAM **[emu]**
+(`tools/harness/experiment_byte0.py`). The sub-game a room plays in comes
+from the menu.
+
+| Sub-game | Byte 0 | Levels | Rooms |
+|---|---|---|---|
+| Spring Breeze | 00 | 0-3 | 0-26 |
+| Dyna Blade | 01 | 4-10 | 27-67 |
+| Gourmet Race | 02 | 11-14 | 68-71 |
+| The Great Cave Offensive | 03 | 15-16 | 72-153 |
+| Revenge of Meta Knight | 04 | 17-25 | 154-196 |
+| Milky Way Wishes | 05 | 26-34 | 197-261 |
+| The Arena | 06 | 35 | 262-283 |
+| (guide theatre, demo, dummies) | 07-0A | 36-59 | 284-318 |
+
+The levels, and how each was identified:
+
+| Level | Rooms | Name | Basis |
+|---|---|---|---|
+| 0-3 | 0-26 | Green Greens (0-5), Float Islands (6-14), Bubbly Clouds (15-23), Mt. Dedede (24-26) | **[emu]** played; the first room of each stage is its title card |
+| 4 | 27-32 | Peanut Plains | **[emu]** played from the menu. The game starts in room 28, not 27: room 27 (176x8) is entered by door `4000` |
+| 5 | 33-42 | Mallow Castle | **[emu]** doors `4007`/`4008` from room 28 land in its garden and hall |
+| 6-8 | 43-65 | Cocoa Cave, Candy Mountain, Dyna Blade's Nest | by order and backgrounds; level 8 holds Dyna Blade (object `55`) |
+| 9, 10 | 66, 67 | "Secret Area 1/2" | guess: single castle interiors full of ability items |
+| 11-13 | 68, 69, 70 | Gourmet Race courses 1-3 | **[emu]** played from the menu |
+| 14 | 71 | an 11x22 sky shaft with no objects | not identified |
+| 15 | 72-152 | The Great Cave Offensive | **[emu]** played from the menu; the only level with treasure chests (§6a) |
+| 16 | 153 | an 11x80 vertical room, clouds at the top | not identified |
+| 17 | 154-156 | Revenge of Meta Knight's prologue (the Warp Star chase) | **[emu]** played from the menu |
+| 18-25 | 157-196 | named after their rooms: the shore, the forest, the deck, the main cannon, the right wing, the engine room, the interior, the reactor | order from backgrounds, dialogue and the HUD; the game's chapter numbers and titles were not checked |
+| 26-33 | 197-258 | Floria (four 121x8 rooms, one per season), Hotbeat, Skyhigh, Cavios, Aqualiss, Mekkai, Halfmoon, ??? | from the rooms' looks (lava, clouds, red cave, water, machines, moons, jungle); no planet was entered. The ROM order is not the order of the star map |
+| 34 | 259-261 | Galactic Nova (Nova's heart, object `60`; Marx in 261) | from the objects |
+| 35 | 262-283 | The Arena (Marx's room is 283) | from the room count and songs; not played |
+
+The guide's curtained theatre rooms are levels 37-41: room 288 was the
+loaded room during Dyna Blade's copy guide **[emu]**.
+
+What was played in each sub-game, and how to get there with the harness, is
+in [docs/emulator-harness.md](docs/emulator-harness.md). Milky Way Wishes
+and The Arena were not entered.
 
 ## 3. Room block
 
 At the address its room pointer gives **[rom]**:
 
 ```
-+0    17  misc header: +2 song, +6 background scroll rate, +12 entrance style [community]
++0    17  misc header: +0 sub-game tag (§2a, unused by the game), +2 music (below),
+          +6 background scroll rate, +12 entrance style [community]
 +17    5  FF
 +22   24  graphics header (§5); bytes 20-23 are four object graphics slots
 +46    1  a fifth object graphics slot (FF when unused)
-+47    7  99 01 01 01 01 01 99 in every Spring Breeze room
++47    7  99 01 01 01 01 01 99 in 266 of 319 rooms (every Spring Breeze room);
+          the others hold 02s and 03s between the 99s. Not understood
 +54    4  two words, unknown (non-zero in the first room of a stage)
 +58       six sections; each starts with a 16-bit pointer relative to itself
           that leads to the next one. An empty section is 04 00 FF FF.
@@ -69,6 +115,14 @@ then   2  EF 3D in every room
        2  height, in cells
        …  HAL-compressed map blob (§4)
 ```
+
+The **music** byte's low 7 bits are the song. **Bit 7 means the room starts
+no song** and the one playing stops **[emu]** (recorded audio,
+`tools/harness/experiment_music_bit.py`: Green Greens room 1 with `8F`
+instead of `0F` falls silent after the stage card; Revenge of Meta Knight's
+room 154, `B3`, is silent through its dialogue and plays at once with `33`).
+The sub-games' dialogue and boss rooms use it (`B3`, `83`, `B5`, `93`, `A2`,
+`BA`, `AD`); a script starts their music later.
 
 Doors are 10-byte records, `FF FF` terminated:
 
@@ -87,9 +141,22 @@ Positions are pixels.
   have a door back from their target when read this way, 2 when read as
   table indices **[rom]**. In Spring Breeze's first stage the two readings
   agree, which is why this went unnoticed.
+  This holds in every sub-game: a door added to Dyna Blade's room 28 with
+  destination 3 entered room 30 **[emu]**, and all 426 doors of levels
+  0-35 read this way lead into their own level **[rom]**. A destination may
+  run past the end of its level, and the game follows it.
 - `7FFF` is a stage's goal door; its door star has variant 16 **[rom]**.
-  Other values from `4000` up occur (`4008`, `4007`, next to object `79`);
-  their meaning is not established.
+- **`4000 | n` leads to room `n`** as `n` does **[emu]**: from Dyna Blade's
+  room 28, `4000` entered room 27, `4007` room 34 and `4008` room 35. The
+  original rooms use it twice (room 59 → `4008`, room 167 → `4007`, both
+  next to object `79`). What the flag changes was not found; the editor
+  keeps it when the destination room is edited.
+- **A door works only on a door tile**: the trigger cell must hold a metatile
+  whose attribute is `0F` **[emu]**. A record and a door
+  star on any other cell did nothing, in Spring Breeze and in Dyna Blade. 372
+  of the 407 original doors with a trigger sit on one; most of the others
+  sit under a breakable block (attributes `70`-`7F`) or on attribute `8F`
+  (Aqualiss's rooms 232-236, untested; the editor accepts it as a door tile).
 - `x`, `y` is the top-left corner of the trigger cell: the game's door stars
   (object `72`, invisible) sit at `x + 12, y + 12`, and Kirby enters a door
   by pressing Up while in that cell **[emu]**: a door put on the cell above
@@ -209,6 +276,39 @@ Medal) and 16 (Saucepan) **[rom]**. How those two are obtained was not looked
 at. Neither was what happens when two chests share a number, or whether a
 chest outside the cave counts towards the collection.
 
+## 6b. Objects of the other sub-games
+
+Objects whose variant carries a number, from the emulator **[emu]** unless
+marked:
+
+- **Gourmet Race** (`tools/harness/experiment_gourmet.py`):
+  - `65`: King Dedede's start place.
+  - `C0` is a sign: variant 0 is the start (without it the race never
+    starts), 16 a checkpoint ("CHECK POINT", then the next course), 32 the
+    goal ("GOAL!", then the results). Courses 1 and 2 end with 16, course 3
+    with 32; a course with neither stays on a black screen.
+  - `C1`: red arrow signs; the variant turns the arrow.
+  - `C2`-`D1`: one food each. The variant does not change the look; in the
+    original courses it counts up along the course (0-72), and what it is
+    for was not found.
+  - `D2`: a Maxim Tomato.
+- **Revenge of Meta Knight** (`tools/harness/experiment_romk.py`):
+  - `BC` is a dialogue: its variant is the line (0-24, global across the
+    sub-game, each with its speaker's portrait), shown when Kirby comes
+    near. Line 0 is the crew spotting Kirby.
+  - The HUD's TIME countdown (2900 in the prologue) is not in the room
+    data that was looked at.
+  - `BD` (in every level) was not identified.
+- **Ability items and copy essences** **[rom]**, not tested: `90`, `91` and
+  Milky Way Wishes' `95` use variants that are multiples of `10`
+  (`00`-`C0`), which suggests the ability in the high nibble.
+- **Items**: Maxim Tomatoes (`82`), 1-Ups (`80`) and foods (`83`-`8D`)
+  carry a different low number in their variant from item to item (the
+  cave's tomatoes run from `40` to `5F`) **[rom]**. What the number does was
+  not tested.
+- Not studied: Dyna Blade's switches (`7F`, `AB`), the Arena's rest room,
+  Milky Way Wishes' copy essence pedestals.
+
 ## 7. HAL compression
 
 A stream of chunks ended by `FF`. A chunk starts with `CCCLLLLL` (command,
@@ -225,8 +325,11 @@ length - 1) or the long form `111CCCLL LLLLLLLL` (10-bit length - 1).
 | 6 | same, reading backwards |
 
 Offsets are absolute, so a stream cannot be decompressed from its middle.
-`kss_core::compression::compress` does an optimal parse and is never larger
-than the original for the Spring Breeze rooms **[rom]**. The game's own
+`kss_core::compression::compress` does a near-optimal parse (it tries the
+longest run of each command, and 128 earlier matches). It is never larger
+than the original for 318 of the 319 rooms; Skyhigh's room 213 re-encodes
+one byte longer (516 bytes for 515), so saving it moves it to free space
+**[rom]**. The game's own
 decompressor has accepted every stream it produced so far (the rooms booted
 in §8), which is not proof for every command mix.
 
@@ -243,7 +346,12 @@ in §8), which is not proof for every command mix.
 Only bank-tail padding is treated as free (about 32 KiB in total): runs of
 `FF` inside a bank can be data. Rooms are self-contained and referenced only
 through the room pointer table, so they can live in any bank. Both paths
-were booted and played in an emulator.
+were booted and played in an emulator: in Spring Breeze, and for the first
+rooms of Dyna Blade (28), Gourmet Race (68), The Great Cave Offensive (72)
+and Revenge of Meta Knight (154), where the tile map in WRAM matched the
+saved room after an in-place edit and after a forced move to another bank
+(`tools/harness/experiment_subgames.py`; a few seconds of play each, no
+room played through). Milky Way Wishes and The Arena rooms were not booted.
 
 ### Breakable blocks
 
@@ -286,7 +394,7 @@ stars of the doors after it; the editor does that in the same undo step.
 
 `tools/harness/` is a headless emulator for scripts (Python `ctypes` over a
 libretro bsnes core): it boots a ROM, replays the inputs that lead into Green
-Greens, and reads WRAM, VRAM, OAM, the palette and screenshots.
+Greens or the first room of another sub-game, and reads WRAM, VRAM, OAM, the palette and screenshots.
 [docs/emulator-harness.md](docs/emulator-harness.md) explains how to use it
 and how each `[emu]` statement here was obtained. `cargo run -p kss-core
 --example patch_room` produces the patched ROMs it runs, and `--example

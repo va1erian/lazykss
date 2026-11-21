@@ -8,6 +8,9 @@ use kss_core::{CELL, Door, Object};
 use super::Editor;
 use crate::history::Change;
 
+/// The collision attribute of a door tile.
+const DOOR_ATTRIBUTE: u8 = 0x0F;
+
 /// The side of a door's trigger cell, in pixels.
 const CELL_PX: u16 = CELL as u16;
 
@@ -26,6 +29,20 @@ impl Editor {
             Some(Destination::Special(v)) => format!("special {v:04X}"),
             None => format!("#{}", door.dest_room),
         }
+    }
+
+    /// False when a door's trigger cell holds no door tile (metatile
+    /// attribute `0F`, or `8F` under water): Kirby cannot enter it there.
+    /// Some original doors start under a breakable block and are only
+    /// entered once it is broken. A door without a trigger is never
+    /// flagged.
+    pub fn door_tile_present(&self, door: &Door) -> bool {
+        if !door.has_trigger() {
+            return true;
+        }
+        let cell = |v: u16| usize::from(v / CELL_PX);
+        let tile = self.room().tile(cell(door.x), cell(door.y));
+        self.tileset().attribute(tile) & 0x7F == DOOR_ATTRIBUTE
     }
 
     /// The door whose trigger box (the cell whose top-left corner is its

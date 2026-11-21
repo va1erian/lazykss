@@ -143,3 +143,55 @@ fn an_added_door_survives_a_save() {
     assert_eq!(back.chests().len(), 58);
     let _ = std::fs::remove_dir_all(temp("door-save"));
 }
+
+#[test]
+fn a_door_off_a_door_tile_is_flagged() {
+    let Some(mut e) = editor() else { return };
+    // Room 1's first door sits on its door tile.
+    let door = e.room().doors()[0];
+    assert!(e.door_tile_present(&door));
+    // The same door moved to a sky cell has none; a warp's door needs none.
+    assert!(!e.door_tile_present(&Door { x: 0, y: 0, ..door }));
+    let warp = Door {
+        x: Door::NO_TRIGGER,
+        y: Door::NO_TRIGGER,
+        ..door
+    };
+    assert!(e.door_tile_present(&warp));
+    // A Milky Way Wishes water door (attribute 8F) counts as a door tile.
+    e.select_room(236).unwrap();
+    let doors = e.room().doors();
+    assert!(
+        doors
+            .iter()
+            .filter(|d| d.has_trigger())
+            .all(|d| e.door_tile_present(d))
+    );
+}
+
+#[test]
+fn sub_game_objects_are_labelled_by_variant() {
+    let Some(mut e) = editor() else { return };
+    // Gourmet Race course 1 starts with a start sign and ends at a checkpoint.
+    e.select_room(68).unwrap();
+    let labels: Vec<String> = e
+        .room()
+        .objects
+        .iter()
+        .filter(|o| o.id == kss_core::names::RACE_SIGN)
+        .map(|o| e.object_label(o))
+        .collect();
+    assert!(labels.contains(&"Race sign: start".to_string()));
+    assert!(labels.contains(&"Race sign: checkpoint".to_string()));
+    e.select_room(154).unwrap();
+    let dialogue = *e
+        .room()
+        .objects
+        .iter()
+        .find(|o| o.id == kss_core::names::DIALOGUE)
+        .unwrap();
+    assert_eq!(
+        e.object_label(&dialogue),
+        format!("Dialogue line {}", dialogue.variant)
+    );
+}
