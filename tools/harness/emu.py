@@ -118,6 +118,7 @@ class Emu:
         self.rom = Path(rom).read_bytes() if isinstance(rom, (str, Path)) else bytes(rom)
         self.pressed = set()
         self.frame = None
+        self.audio = None  # a bytearray of 16-bit stereo samples while recording
         self._work_dir = C.c_char_p(os.getcwd().encode())
         self.lib = lib = C.CDLL(str(core or find_core()))
 
@@ -153,13 +154,18 @@ class Emu:
         def joypad(port, _device, _index, button):
             return 1 if port == 0 and button in self.pressed else 0
 
+        def audio_batch(data, frames):
+            if self.audio is not None:
+                self.audio += C.string_at(data, frames * 4)
+            return frames
+
         self._discard_log = _LOG(lambda level, message: None)
         # The callbacks must outlive the calls that register them.
         self._callbacks = [
             _ENV(environment),
             _VIDEO(video),
             _AUDIO(lambda left, right: None),
-            _AUDIO_BATCH(lambda data, frames: frames),
+            _AUDIO_BATCH(audio_batch),
             _POLL(lambda: None),
             _INPUT(joypad),
         ]
@@ -200,6 +206,18 @@ class Emu:
         self.run(hold, [button])
         self.run(wait)
 
+    def record_audio(self, frames, buttons=()):
+        """Runs `frames` frames and returns the sound they made: a numpy-ready
+        bytes object of interleaved signed 16-bit stereo samples (32 kHz).
+
+        The emulator is deterministic, so the same song started at the same
+        moment gives the same samples: equal bytes mean equal sound.
+        """
+        self.audio = bytearray()
+        self.run(frames, buttons)
+        taken, self.audio = bytes(self.audio), None
+        return taken
+
     # ---- memory ----
 
     def memory(self, memory_id):
@@ -218,6 +236,10 @@ class Emu:
     def bwram(self):
         """The cartridge RAM (6000-7FFF on the SA-1 side), 8 KiB."""
         return self.memory(MEMORY_SAVE_RAM)
+
+    def poke_bwram(self, offset, value):
+        """Writes one byte of cartridge RAM (see session.py, `UNLOCK`)."""
+        C.memset(self.lib.retro_get_memory_data(MEMORY_SAVE_RAM) + offset, value, 1)
 
     def state(self):
         """The core's savestate: every register and memory, in the core's own layout."""
