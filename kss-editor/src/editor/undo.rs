@@ -35,11 +35,11 @@ impl Editor {
     /// Applies `change` to the current room and records it.
     pub(super) fn perform(&mut self, change: Change) {
         let lr = self.rooms.active_mut();
-        change.apply(&mut lr.room);
+        change.apply(&mut lr.room, &mut lr.buffer);
         if change.alters_image() {
             lr.revision += 1;
         }
-        lr.dirty = true;
+        lr.dirty |= change.modifies_room();
         lr.redo.clear();
         let Some(group) = self.group.as_mut() else {
             lr.undo.push(vec![change]);
@@ -61,12 +61,12 @@ impl Editor {
             return false;
         };
         for change in entry.iter().rev() {
-            change.revert(&mut lr.room);
+            change.revert(&mut lr.room, &mut lr.buffer);
             if change.alters_image() {
                 lr.revision += 1;
             }
         }
-        lr.dirty = true;
+        lr.dirty |= entry.iter().any(Change::modifies_room);
         self.forget_moved_selection(&entry);
         self.rooms.active_mut().redo.push(entry);
         true
@@ -79,12 +79,12 @@ impl Editor {
             return false;
         };
         for change in &entry {
-            change.apply(&mut lr.room);
+            change.apply(&mut lr.room, &mut lr.buffer);
             if change.alters_image() {
                 lr.revision += 1;
             }
         }
-        lr.dirty = true;
+        lr.dirty |= entry.iter().any(Change::modifies_room);
         self.forget_moved_selection(&entry);
         self.rooms.active_mut().undo.push(entry);
         true

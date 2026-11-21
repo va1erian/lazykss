@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use kss_core::{Rom, Room, Tables, Tileset};
 
 use super::{Editor, LoadedRoom};
-use crate::history::MapSnapshot;
+use crate::history::{Buffer, MapSnapshot};
 
 /// Reads room `index` from the ROM, unmodified and with an empty history.
 pub(super) fn load_room(rom: &Rom, tables: &Tables, index: usize) -> Result<LoadedRoom, String> {
@@ -20,6 +20,7 @@ pub(super) fn load_room(rom: &Rom, tables: &Tables, index: usize) -> Result<Load
         undo: Vec::new(),
         redo: Vec::new(),
         dirty: false,
+        buffer: Buffer::new(),
     })
 }
 

@@ -110,9 +110,29 @@ impl Layer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gesture {
     Idle,
-    Paint { last: (i32, i32) },
-    Rect { start: (i32, i32) },
-    Move { index: usize, dx: i32, dy: i32 },
+    /// Painting, or emptying buffer cells when `erase`.
+    Paint {
+        last: (i32, i32),
+        erase: bool,
+    },
+    Rect {
+        start: (i32, i32),
+    },
+    /// Choosing the cells the stamp tool copies.
+    Copy {
+        start: (i32, i32),
+    },
+    /// Pasting the stamp: first at `origin`, then wherever a whole stamp
+    /// fits from there as the pointer moves, so a drag repeats the motif.
+    Stamp {
+        origin: (i32, i32),
+        last: (i32, i32),
+    },
+    Move {
+        index: usize,
+        dx: i32,
+        dy: i32,
+    },
 }
 
 /// Handles of every widget the app updates after the layout is mounted.

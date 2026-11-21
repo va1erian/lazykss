@@ -1,7 +1,9 @@
-//! Painting and filling the tile map of the current room.
+//! Painting and filling the tile map of the current room and the scratch
+//! buffer around it.
 
-use super::Editor;
-use crate::history::{Change, TileChange};
+use std::collections::HashSet;
+
+use super::{Cell, Editor};
 
 /// The cells on the line between two cells, both included, so a fast drag
 /// paints without gaps.
@@ -40,7 +42,7 @@ impl Editor {
 
     /// The index in the current room's tiles of a cell, `None` outside the
     /// room.
-    fn cell_index(&self, x: i32, y: i32) -> Option<usize> {
+    pub(super) fn cell_index(&self, x: i32, y: i32) -> Option<usize> {
         let (x, y) = (usize::try_from(x).ok()?, usize::try_from(y).ok()?);
         let r = self.room();
         (x < r.width && y < r.height).then(|| y * r.width + x)
@@ -51,20 +53,10 @@ impl Editor {
         self.room().tiles.get(index).copied()
     }
 
-    /// Sets one cell to `id`. Returns whether it changed.
+    /// Sets one cell of the map or the buffer to `id`. Returns whether it
+    /// changed.
     pub fn set_tile(&mut self, x: i32, y: i32, id: u16) -> bool {
-        let (Some(index), Some(old)) = (self.cell_index(x, y), self.tile_at(x, y)) else {
-            return false;
-        };
-        if old == id {
-            return false;
-        }
-        self.perform(Change::Tiles(vec![TileChange {
-            index,
-            old,
-            new: id,
-        }]));
-        true
+        self.set_cells([((x, y), Some(id))]) > 0
     }
 
     /// Paints the current tile at a cell.
@@ -72,9 +64,10 @@ impl Editor {
         self.set_tile(x, y, self.tile)
     }
 
-    /// Picks the tile under a cell as the current one.
+    /// Picks the tile under a cell of the map or the buffer as the current
+    /// one.
     pub fn pick_tile(&mut self, x: i32, y: i32) -> bool {
-        match self.tile_at(x, y) {
+        match self.cell(x, y).tile() {
             Some(id) => {
                 self.tile = id;
                 true
@@ -84,83 +77,44 @@ impl Editor {
     }
 
     /// Fills the cells between two corners (inclusive, any order) with the
-    /// current tile. Returns how many cells changed.
+    /// current tile, on the map and in the buffer. Returns how many cells
+    /// changed.
     pub fn fill_rect(&mut self, a: (i32, i32), b: (i32, i32)) -> usize {
-        let room = self.room();
-        let width = i32::try_from(room.width).unwrap_or(i32::MAX);
-        let height = i32::try_from(room.height).unwrap_or(i32::MAX);
-        let (x0, x1) = (a.0.min(b.0).max(0), a.0.max(b.0).min(width - 1));
-        let (y0, y1) = (a.1.min(b.1).max(0), a.1.max(b.1).min(height - 1));
-        let mut cells = Vec::new();
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                let Some(index) = self.cell_index(x, y) else {
-                    continue;
-                };
-                match room.tiles.get(index) {
-                    Some(&old) if old != self.tile => cells.push(TileChange {
-                        index,
-                        old,
-                        new: self.tile,
-                    }),
-                    _ => {}
-                }
-            }
-        }
-        let n = cells.len();
-        if n > 0 {
-            self.perform(Change::Tiles(cells));
-        }
-        n
+        let (l, t, r, bottom) = self.canvas_cells();
+        let (x0, x1) = (a.0.min(b.0).max(l), a.0.max(b.0).min(r - 1));
+        let (y0, y1) = (a.1.min(b.1).max(t), a.1.max(b.1).min(bottom - 1));
+        let tile = Some(self.tile);
+        let cells: Vec<_> = (y0..=y1)
+            .flat_map(|y| (x0..=x1).map(move |x| ((x, y), tile)))
+            .collect();
+        self.set_cells(cells)
     }
 
-    /// Replaces the 4-connected region of equal tiles around a cell with the
-    /// current tile. Returns how many cells changed.
+    /// Replaces the 4-connected region of equal cells around a cell with the
+    /// current tile. A region of the map stays on the map, one of the buffer
+    /// in the buffer. Returns how many cells changed.
     pub fn flood_fill(&mut self, x: i32, y: i32) -> usize {
-        let Some(target) = self.tile_at(x, y) else {
-            return 0;
-        };
-        if target == self.tile {
+        let target = self.cell(x, y);
+        if target == Cell::Outside || target.tile() == Some(self.tile) {
             return 0;
         }
-        // `tile_at` found the cell, so both coordinates are non-negative.
-        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else {
-            return 0;
-        };
-        let room = self.room();
-        let (width, height) = (room.width, room.height);
-        let mut seen = vec![false; room.tiles.len()];
-        let mut cells = Vec::new();
+        let tile = Some(self.tile);
+        let mut seen = HashSet::new();
+        let mut region = Vec::new();
         let mut stack = vec![(x, y)];
         while let Some((cx, cy)) = stack.pop() {
-            let index = cy * width + cx;
-            let (Some(done), Some(&tile)) = (seen.get_mut(index), room.tiles.get(index)) else {
-                continue;
-            };
-            if *done || tile != target {
+            if !seen.insert((cx, cy)) || self.cell(cx, cy) != target {
                 continue;
             }
-            *done = true;
-            cells.push(TileChange {
-                index,
-                old: target,
-                new: self.tile,
-            });
-            if cx > 0 {
-                stack.push((cx - 1, cy));
-            }
-            if cx + 1 < width {
-                stack.push((cx + 1, cy));
-            }
-            if cy > 0 {
-                stack.push((cx, cy - 1));
-            }
-            if cy + 1 < height {
-                stack.push((cx, cy + 1));
-            }
+            region.push(((cx, cy), tile));
+            // The region ends at the buffer's edge, so these never saturate.
+            stack.extend([
+                (cx.saturating_sub(1), cy),
+                (cx.saturating_add(1), cy),
+                (cx, cy.saturating_sub(1)),
+                (cx, cy.saturating_add(1)),
+            ]);
         }
-        let n = cells.len();
-        self.perform(Change::Tiles(cells));
-        n
+        self.set_cells(region)
     }
 }

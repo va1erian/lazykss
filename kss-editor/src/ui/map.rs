@@ -277,9 +277,15 @@ fn process<M: 'static>(ctx: &Context<M>, st: &mut ViewState, event: &Event) -> O
                 return Some(out);
             }
             let amount = (notches * WHEEL_STEP as f32).round() as i32;
-            // Rooms are wide and short: when nothing scrolls vertically the
-            // wheel scrolls sideways.
-            let sideways = horizontal || modifiers.shift || st.scroller.max_offset().1 == 0;
+            // Rooms are wide and short: when the room fits the height the
+            // wheel scrolls sideways, and Shift reaches the buffer above
+            // and below.
+            let sideways = horizontal
+                || if st.room_fits_vertically() || st.scroller.max_offset().1 == 0 {
+                    !modifiers.shift
+                } else {
+                    modifiers.shift
+                };
             if sideways {
                 // Wheel up (positive) moves left; a horizontal wheel's positive is right.
                 let dx = if horizontal { amount } else { -amount };

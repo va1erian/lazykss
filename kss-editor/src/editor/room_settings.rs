@@ -28,9 +28,17 @@ impl Editor {
         let mut probe = self.room().clone();
         probe.resize(width, height);
         let new = MapSnapshot::of(&probe);
-        self.perform(Change::Resize {
-            old: Box::new(old),
-            new: Box::new(new),
+        // Buffer cells the new size covers or leaves beyond the margin could
+        // be neither seen nor erased: they go, and come back on undo.
+        let hidden = self.buffer_cells_hidden_by(width, height);
+        self.as_one_step(|e| {
+            if !hidden.is_empty() {
+                e.perform(Change::Buffer(hidden));
+            }
+            e.perform(Change::Resize {
+                old: Box::new(old),
+                new: Box::new(new),
+            });
         });
         // Objects outside the new bounds stay; the game ignores them but the
         // user can see and delete them.

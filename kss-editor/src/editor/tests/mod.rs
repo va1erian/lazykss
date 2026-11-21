@@ -1,6 +1,7 @@
 //! Tests of the editing model. Those that need the ROM pass silently when
 //! `Rom::locate` cannot find it.
 
+mod buffer;
 mod doors;
 mod editing;
 mod saving;

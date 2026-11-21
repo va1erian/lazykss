@@ -7,6 +7,7 @@ A level editor for *Kirby Super Star* (SNES, US). It edits the rooms of
 [The window](#the-window) ·
 [Moving around](#moving-around) ·
 [Tiles](#tiles) ·
+[Buffer and stamp](#buffer-and-stamp) ·
 [Objects](#objects) ·
 [Doors and warp stars](#doors-and-warp-stars) ·
 [Treasures](#treasures) ·
@@ -33,7 +34,8 @@ Your original ROM is never modified unless you pick it yourself in Save As.
   A `*` marks a room, or a group, with unsaved changes. The first room of
   each stage is its title card.
 - **Map** (centre): the room as the game draws it, with its background,
-  tiles and object sprites.
+  tiles and object sprites. Around it, on a checkerboard, is the
+  [buffer](#buffer-and-stamp): scratch space that is never saved.
 - **Tabs** (right): Tiles, Objects, Doors, Room, Treasures, and Help
   (this guide; F1 or **Help > User guide** opens it).
 - **Status bars** (bottom): the room, the cell and pixel under the pointer,
@@ -48,12 +50,14 @@ a layer never changes the room.
 
 | Action | How |
 |---|---|
-| Scroll | Mouse wheel; Shift+wheel scrolls sideways |
+| Scroll | Mouse wheel; Shift+wheel scrolls the other way |
 | Pan | Drag with the middle button |
 | Zoom | Ctrl+wheel, the toolbar, or keys 1 to 4 (1x to 4x) |
 
-Most rooms are wide and short: when a room does not scroll vertically, the
-wheel scrolls sideways.
+Most rooms are wide and short: when a room fits the map's height, the wheel
+scrolls sideways and **Shift+wheel** scrolls up and down, into the buffer
+above and below. In a taller room the wheel scrolls up and down and
+Shift+wheel sideways. A room opens scrolled to its top-left corner.
 
 ## Tiles
 
@@ -63,15 +67,51 @@ from the room's tileset.
 - Pick a tile in the **Tiles** tab, or right-click a cell on the map with a
   tile tool (Alt+click also works with Paint). The tab shows the tile id and
   its **attribute** (collision class: `00` empty, `50` solid ground...).
-- **Paint** (B): click or drag. A drag is one undo step.
+- **Paint** (B): click or drag. A drag is one undo step. **Shift+drag**
+  erases [buffer](#buffer-and-stamp) cells.
 - **Rect** (R): drag a rectangle, release to fill it.
 - **Fill** (G): flood fill of the connected cells with the same tile.
+- **Stamp** (S): copy cells and paste them elsewhere; see
+  [Buffer and stamp](#buffer-and-stamp).
+
+All tile tools work on the room and on the buffer around it.
 
 Tile `000` is fully transparent, not "nothing": it is an ordinary tile.
 
 **Star and bomb blocks** (attribute `70`-`7F`) only break in game when the
 room lists their cell. The editor does this for you on save: blocks you
 painted are added, blocks you painted over are removed. No action needed.
+
+## Buffer and stamp
+
+The **buffer** is a band of 16 cells all around the room, drawn on a
+checkerboard, with a line at the room's edge. Use it to compose a motif (a
+platform, a pipe, a decoration) before putting it in the room.
+
+- Paint, Rect, Fill and tile picking work in the buffer as on the map. A
+  rectangle across the room's edge fills both. A flood fill stays on the
+  side it starts on.
+- **Shift+drag** with Paint empties buffer cells. Room cells cannot be
+  emptied: paint them with another tile.
+- The buffer is **never saved** and does not mark the room as modified. Its
+  edits are undone and redone like the others. Each room has its own buffer,
+  so a motif shows in that room's tileset. It is lost when another ROM is
+  opened.
+- Objects cannot go in the buffer: the Object tool ignores clicks there.
+
+The **Stamp** tool (S) copies a rectangle of cells and pastes it:
+
+- **Right-drag** over cells, in the buffer or in the room, to copy them.
+  Empty buffer cells are see-through: pasting leaves what is under them, so
+  a motif need not be a rectangle.
+- **Click** to paste. The stamp follows the pointer, ghosted, where a click
+  would put it.
+- **Drag** to repeat it: a copy is pasted each time the pointer moves a
+  whole stamp's width or height from where the drag began. The whole drag
+  is one undo step.
+- The stamp stays when you switch rooms. Its cells are tile numbers, so in a
+  room with another tileset they show other tiles; the status bar warns
+  when that happens.
 
 ## Objects
 
@@ -81,8 +121,8 @@ pixels from the room's top-left corner.
 
 - **Select** (V): click an object to select it and drag to move it. Arrow
   keys nudge by 1 pixel, Shift+arrows by 8.
-- **Object** (O): click the map to place a new object of the ID and variant
-  set under *New object* in the Objects tab. **Add** places one in the
+- **Object** (O): click the room to place a new object of the ID and variant
+  set under *New object* in the Objects tab (not in the buffer). **Add** places one in the
   middle of the view.
 - **Delete** or Backspace removes the selected object. Esc deselects.
 - Edit the ID, variant and position of the selected object in the tab.
@@ -159,14 +199,16 @@ The **Room** tab:
 - **Size**: width and height in cells (up to 512x128, and at most 30,000
   cells). **Resize** keeps the top-left cells; new cells are empty (tile
   0). Objects and doors left outside the new size stay in the lists: the
-  game ignores them, so move or delete them.
+  game ignores them, so move or delete them. Buffer cells the new size
+  covers, or leaves beyond the buffer, are cleared; undo brings them back.
 - **Room header**: shown for reference, read-only.
 
 ## Undo
 
 Ctrl+Z undoes, Ctrl+Y (or Ctrl+Shift+Z) redoes. **Each room has its own
-history**: undo acts on the room on screen only. A paint stroke, a drag and
-a door deletion are each one step. History survives saving, but not opening
+history**: undo acts on the room on screen only. A paint stroke, a drag,
+a stamp drag and a door deletion are each one step. Buffer edits are in the
+history too. History survives saving, but not opening
 another ROM.
 
 ## Saving
@@ -210,9 +252,12 @@ another ROM.
 | Ctrl+S / Ctrl+Shift+S | Save / Save As |
 | Ctrl+Z / Ctrl+Y | Undo / Redo |
 | F1 | Show this guide |
-| V B R G O | Select, Paint, Rect, Fill, Object tool (map focused) |
+| V B R G S O | Select, Paint, Rect, Fill, Stamp, Object tool (map focused) |
 | 1-4 | Zoom 1x to 4x (map focused) |
 | Arrows / Shift+arrows | Nudge the selected object 1 / 8 px (map focused) |
 | Delete, Backspace | Delete the selected object, else the selected door (map focused) |
 | Esc | Deselect, cancel a rectangle (map focused) |
 | Right-click, Alt+click | Pick the tile under the pointer (tile tools) |
+| Shift+drag | Erase buffer cells (Paint) |
+| Right-drag / click / drag | Copy cells / paste / repeat the stamp (Stamp) |
+| Shift+wheel | Scroll the other way (into the buffer above and below a short room) |

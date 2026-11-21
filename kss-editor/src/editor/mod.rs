@@ -6,9 +6,10 @@
 //!
 //! The methods of [`Editor`] are spread over submodules by what they edit:
 //! `rooms` (which rooms are loaded and current), `undo` (gestures, undo and
-//! redo), `tiles`, `objects`, `doors`, `room_settings` (music and size) and
-//! `saving`.
+//! redo), `tiles`, `buffer` (the scratch cells around the map and the
+//! stamp), `objects`, `doors`, `room_settings` (music and size) and `saving`.
 
+mod buffer;
 mod doors;
 mod objects;
 mod room_settings;
@@ -26,9 +27,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use kss_core::room::{GREAT_CAVE_OFFENSIVE, NAMED_LEVELS};
 use kss_core::{Level, ObjectSprites, Rom, Room, Tables, Tileset};
 
-use crate::history::{Entry, MapSnapshot};
+use crate::history::{Buffer, Entry, MapSnapshot};
 use rooms::Rooms;
 
+pub use buffer::{BUFFER_MARGIN, Cell, Stamp};
 pub use saving::{SaveSummary, default_edited_path};
 pub use tiles::line_cells;
 
@@ -39,15 +41,17 @@ pub enum Tool {
     Paint,
     Rect,
     Fill,
+    Stamp,
     AddObject,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 5] = [
+    pub const ALL: [Tool; 6] = [
         Tool::Select,
         Tool::Paint,
         Tool::Rect,
         Tool::Fill,
+        Tool::Stamp,
         Tool::AddObject,
     ];
 
@@ -57,6 +61,7 @@ impl Tool {
             Tool::Paint => "Paint",
             Tool::Rect => "Rect",
             Tool::Fill => "Fill",
+            Tool::Stamp => "Stamp",
             Tool::AddObject => "Object",
         }
     }
@@ -64,9 +69,12 @@ impl Tool {
     pub fn hint(self) -> &'static str {
         match self {
             Tool::Select => "Select / move objects (V)",
-            Tool::Paint => "Paint tiles; right-click or Alt+click picks (B)",
+            Tool::Paint => {
+                "Paint tiles; right-click or Alt+click picks, Shift erases the buffer (B)"
+            }
             Tool::Rect => "Fill a rectangle of cells (R)",
             Tool::Fill => "Flood fill (G)",
+            Tool::Stamp => "Stamp: right-drag copies cells, click or drag pastes them (S)",
             Tool::AddObject => "Place a new object (O)",
         }
     }
@@ -84,6 +92,8 @@ pub struct LoadedRoom {
     pub undo: Vec<Entry>,
     pub redo: Vec<Entry>,
     pub dirty: bool,
+    /// Scratch cells drawn around the map; never saved.
+    pub buffer: Buffer,
 }
 
 /// A treasure chest placed in a room.
@@ -118,6 +128,8 @@ pub struct Editor {
     pub new_object: (u8, u8),
     pub selected_object: Option<usize>,
     pub selected_door: Option<usize>,
+    /// The cells the stamp tool pastes, shared by every room.
+    pub stamp: Option<Stamp>,
     group: Option<Entry>,
 }
 
@@ -150,6 +162,7 @@ impl Editor {
             new_object: (0x01, 0),
             selected_object: None,
             selected_door: None,
+            stamp: None,
             group: None,
         };
         // The named levels are listed with their sizes, and the treasure

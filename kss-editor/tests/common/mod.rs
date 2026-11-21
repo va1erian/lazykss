@@ -37,7 +37,8 @@ pub fn check(log: &Log, ok: bool, what: &str) {
     }
 }
 
-/// Room pixel to window pixel, with the view unscrolled.
+/// Room pixel to window pixel, with the view at its home position (the
+/// room's top-left corner at the map's corner, the buffer scrolled away).
 pub fn at(px: i32, py: i32) -> (i32, i32) {
     (MAP.0 + px * ZOOM, MAP.1 + py * ZOOM)
 }

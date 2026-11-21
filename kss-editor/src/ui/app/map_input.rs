@@ -90,6 +90,14 @@ impl EditorApp {
             return;
         }
         let tool = self.ed(|e| e.tool).unwrap_or(Tool::Select);
+        if tool == Tool::Stamp && button == MouseButton::Right {
+            self.gesture = Gesture::Copy { start: cell };
+            self.h
+                .map
+                .get()
+                .update_view(|v| v.rect_drag = Some((cell, cell)));
+            return;
+        }
         let tile_tool = matches!(tool, Tool::Paint | Tool::Rect | Tool::Fill);
         // Right-click, or Alt+click with the paint tool, picks the tile.
         if (button == MouseButton::Right && tile_tool) || (mods.alt && tool == Tool::Paint) {
@@ -107,13 +115,19 @@ impl EditorApp {
         match tool {
             Tool::Select => self.select_at(pos),
             Tool::Paint => {
+                let erase = mods.shift;
                 self.ed_mut(|e| {
                     e.begin_group();
-                    e.paint(cell.0, cell.1);
+                    if erase {
+                        e.erase(cell.0, cell.1);
+                    } else {
+                        e.paint(cell.0, cell.1);
+                    }
                 });
-                self.gesture = Gesture::Paint { last: cell };
+                self.gesture = Gesture::Paint { last: cell, erase };
                 self.after_stroke();
             }
+            Tool::Stamp => self.start_stamp(cell),
             Tool::Rect => {
                 self.gesture = Gesture::Rect { start: cell };
                 self.h
@@ -129,11 +143,50 @@ impl EditorApp {
                 }
             }
             Tool::AddObject => {
+                // The buffer is scratch space: an object there would land on
+                // the room's edge, where the user did not click.
+                if !self.ed(|e| e.in_bounds(cell.0, cell.1)).unwrap_or(false) {
+                    self.say("Objects go in the room, not in the buffer around it");
+                    return;
+                }
                 self.ed_mut(|e| e.add_object(pos.0, pos.1));
                 self.after_edit();
                 self.select_object_row();
             }
         }
+    }
+
+    /// A Stamp click at `cell`: pastes the stamp there and starts a drag
+    /// that repeats it.
+    fn start_stamp(&mut self, cell: (i32, i32)) {
+        if self.ed(|e| e.stamp.is_none()).unwrap_or(true) {
+            self.say("Nothing to paste: right-drag over cells to copy them first");
+            return;
+        }
+        self.ed_mut(|e| {
+            e.begin_group();
+            e.paste_stamp(cell);
+        });
+        self.gesture = Gesture::Stamp {
+            origin: cell,
+            last: cell,
+        };
+        self.after_stroke();
+        if !self.ed(|e| e.stamp_fits_tileset()).unwrap_or(true) {
+            self.say("The stamp was copied in a room with another tileset: its tiles look different here");
+        }
+    }
+
+    /// Where a stamp drag that began at `origin` pastes next with the
+    /// pointer on `cell`: snapped to the stamp's own grid.
+    fn stamp_step(&self, origin: (i32, i32), cell: (i32, i32)) -> Option<(i32, i32)> {
+        let (w, h) = self
+            .ed(|e| e.stamp.as_ref().map(|s| (s.width.max(1), s.height.max(1))))
+            .flatten()?;
+        let snap = |o: i32, c: i32, n: i32| {
+            o.saturating_add(c.saturating_sub(o).div_euclid(n).saturating_mul(n))
+        };
+        Some((snap(origin.0, cell.0, w), snap(origin.1, cell.1, h)))
     }
 
     /// A Select click at room position `pos`: picks the object there (and
@@ -189,18 +242,31 @@ impl EditorApp {
 
     fn drag(&mut self, cell: (i32, i32), pos: (i32, i32)) {
         match self.gesture {
-            Gesture::Paint { last } => {
+            Gesture::Paint { last, erase } => {
                 if cell != last {
                     self.ed_mut(|e| {
                         for (x, y) in line_cells(last, cell) {
-                            e.paint(x, y);
+                            if erase {
+                                e.erase(x, y);
+                            } else {
+                                e.paint(x, y);
+                            }
                         }
                     });
-                    self.gesture = Gesture::Paint { last: cell };
+                    self.gesture = Gesture::Paint { last: cell, erase };
                     self.after_stroke();
                 }
             }
-            Gesture::Rect { start } => {
+            Gesture::Stamp { origin, last } => {
+                if let Some(at) = self.stamp_step(origin, cell)
+                    && at != last
+                {
+                    self.ed_mut(|e| e.paste_stamp(at));
+                    self.gesture = Gesture::Stamp { origin, last: at };
+                    self.after_stroke();
+                }
+            }
+            Gesture::Rect { start } | Gesture::Copy { start } => {
                 self.h
                     .map
                     .get()
@@ -219,9 +285,21 @@ impl EditorApp {
 
     fn release(&mut self, cell: (i32, i32)) {
         match std::mem::replace(&mut self.gesture, Gesture::Idle) {
-            Gesture::Paint { .. } => {
+            Gesture::Paint { .. } | Gesture::Stamp { .. } => {
                 self.ed_mut(|e| e.end_group());
                 self.after_stroke();
+            }
+            Gesture::Copy { start } => {
+                let size = self.ed_mut(|e| e.copy_stamp(start, cell)).flatten();
+                self.h.map.get().update_view(|v| v.rect_drag = None);
+                match size {
+                    Some((w, h)) => {
+                        self.say(&format!(
+                            "Copied {w}x{h} cells: click to paste, drag to repeat"
+                        ));
+                    }
+                    None => self.say("Nothing copied: those cells are empty"),
+                }
             }
             Gesture::Rect { start } => {
                 let n = self.ed_mut(|e| e.fill_rect(start, cell)).unwrap_or(0);

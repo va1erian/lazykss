@@ -1,4 +1,5 @@
-//! Painting the map: room image, grid, doors, objects and tool overlays.
+//! Painting the map: the buffer around the room, the room image, grid,
+//! doors, objects and tool overlays.
 
 use kss_core::names::{TREASURE_CHEST, WARP_STAR};
 use kss_core::{CELL, Object};
@@ -8,7 +9,7 @@ use xui::backend::{Canvas, ImageSampling, Rgba, TextStyle};
 use xui::geometry::{Point, Rect};
 use xui::theme::Theme;
 
-use crate::editor::{Editor, Tool};
+use crate::editor::{Cell, Editor, Tool};
 
 use super::render::RoomImages;
 use super::view::ViewState;
@@ -80,23 +81,34 @@ fn paint_room(
     }
 
     let area = view.scroller.view();
-    let (zoom, (ox, oy)) = (view.zoom, view.scroller.offset);
+    let zoom = view.zoom;
     canvas.push_clip(area);
 
+    paint_buffer_backdrop(canvas, editor, view, area, theme);
     // The canvas scales the image with nearest-neighbour sampling and
     // paints only what the clip shows.
     if let Some(image) = cache.room() {
+        let (left, top) = view.to_screen((0, 0));
         let (w, h) = (image.width() as i32 * zoom, image.height() as i32 * zoom);
         canvas.draw_image_sampled(
             image,
-            Rect::new(-ox, -oy, w - ox, h - oy),
+            Rect::new(left, top, left + w, top + h),
             ImageSampling::Nearest,
         );
     }
-
-    if view.grid {
-        paint_grid(canvas, view, area);
+    if view.layers.foreground {
+        paint_buffer_tiles(canvas, editor, view, cache, area);
     }
+    if view.grid {
+        paint_grid(canvas, editor, view, area);
+    }
+    // The room's edge, where the saved map ends and the buffer begins.
+    let edge = cells_rect(view, (0, 0, room.width as i32, room.height as i32));
+    canvas.stroke_rect(
+        Rect::new(edge.left - 1, edge.top - 1, edge.right + 1, edge.bottom + 1),
+        theme.accent,
+        2.0,
+    );
     if view.doors {
         paint_doors(canvas, editor, view, theme);
     }
@@ -109,26 +121,99 @@ fn paint_room(
     view.scroller.paint(canvas, theme);
 }
 
-/// The cell grid over the visible part of the room (its size in cells is
-/// `view.room_cells`, the content size `view.scroller.content`).
-fn paint_grid(canvas: &mut dyn Canvas, view: &ViewState, area: Rect) {
-    // At least 1: the zoom is, and a cell is not empty.
-    let cell = (CELL as i32).saturating_mul(view.zoom).max(1);
-    let line = Rgba::with_alpha(255, 255, 255, 70);
-    let (ox, oy) = view.scroller.offset;
-    let (w, h) = view.scroller.content;
-    let (width, height) = view.room_cells;
-    let last_column = (ox.saturating_add(area.width()) / cell).min(width);
-    for i in (ox / cell)..=last_column {
-        let x = i.saturating_mul(cell).saturating_sub(ox);
-        let bottom = h.saturating_sub(oy).min(area.bottom);
-        canvas.fill_rect_rgba(Rect::new(x, 0, x.saturating_add(1), bottom), line);
+/// The cells of the map and buffer that `area` shows:
+/// `(left, top, right, bottom)`, right and bottom exclusive.
+fn visible_cells(editor: &Editor, view: &ViewState, area: Rect) -> (i32, i32, i32, i32) {
+    let (l, t, r, b) = editor.canvas_cells();
+    let first = ViewState::cell_of(view.to_room(area.left, area.top));
+    let last = ViewState::cell_of(view.to_room(area.right - 1, area.bottom - 1));
+    (
+        l.max(first.0),
+        t.max(first.1),
+        r.min(last.0 + 1),
+        b.min(last.1 + 1),
+    )
+}
+
+/// The screen rectangle of a range of cells, right and bottom exclusive.
+fn cells_rect(view: &ViewState, (l, t, r, b): (i32, i32, i32, i32)) -> Rect {
+    let c = CELL as i32;
+    let a = view.to_screen((l * c, t * c));
+    let z = view.to_screen((r * c, b * c));
+    Rect::new(a.0, a.1, z.0, z.1)
+}
+
+/// A checkerboard under the buffer cells, so the scratch area never reads as
+/// part of the room.
+fn paint_buffer_backdrop(
+    canvas: &mut dyn Canvas,
+    editor: &Editor,
+    view: &ViewState,
+    area: Rect,
+    theme: &Theme,
+) {
+    let a = theme.accent;
+    let (light, dark) = (
+        Rgba::with_alpha(a.r, a.g, a.b, 20),
+        Rgba::with_alpha(a.r, a.g, a.b, 50),
+    );
+    let (l, t, r, b) = visible_cells(editor, view, area);
+    for y in t..b {
+        for x in l..r {
+            if !editor.in_bounds(x, y) {
+                let tone = if (x + y) & 1 == 0 { light } else { dark };
+                canvas.fill_rect_rgba(cell_rect(view, (x, y)), tone);
+            }
+        }
     }
-    let last_row = (oy.saturating_add(area.height()) / cell).min(height);
-    for j in (oy / cell)..=last_row {
-        let y = j.saturating_mul(cell).saturating_sub(oy);
-        let right = w.saturating_sub(ox).min(area.right);
-        canvas.fill_rect_rgba(Rect::new(0, y, right, y.saturating_add(1)), line);
+}
+
+/// One metatile over the room's backdrop colour, as the game would show it.
+fn paint_metatile(
+    canvas: &mut dyn Canvas,
+    editor: &Editor,
+    view: &ViewState,
+    cache: &mut RoomImages,
+    cell: (i32, i32),
+    id: u16,
+) {
+    let rect = cell_rect(view, cell);
+    let [r, g, b, _] = editor.tileset().backdrop();
+    canvas.fill_rect_rgba(rect, Rgba::with_alpha(r, g, b, 255));
+    let key = (editor.session(), editor.current_index());
+    if let Some(image) = cache.metatile(key, editor.tileset(), id) {
+        canvas.draw_image_sampled(image, rect, ImageSampling::Nearest);
+    }
+}
+
+fn paint_buffer_tiles(
+    canvas: &mut dyn Canvas,
+    editor: &Editor,
+    view: &ViewState,
+    cache: &mut RoomImages,
+    area: Rect,
+) {
+    let (l, t, r, b) = visible_cells(editor, view, area);
+    for (&(x, y), &id) in editor.buffer() {
+        if x >= l && x < r && y >= t && y < b && !editor.in_bounds(x, y) {
+            paint_metatile(canvas, editor, view, cache, (x, y), id);
+        }
+    }
+}
+
+fn paint_grid(canvas: &mut dyn Canvas, editor: &Editor, view: &ViewState, area: Rect) {
+    let line = Rgba::with_alpha(255, 255, 255, 70);
+    let c = CELL as i32;
+    let (l, t, r, b) = visible_cells(editor, view, area);
+    let (left, top) = view.to_screen((l * c, t * c));
+    let (right, bottom) = view.to_screen((r * c, b * c));
+    for i in l..=r {
+        let x = view.to_screen((i * c, 0)).0;
+        canvas.fill_rect_rgba(Rect::new(x, top, x + 1, bottom), line);
+    }
+    for j in t..=b {
+        let y = view.to_screen((0, j * c)).1;
+        canvas.fill_rect_rgba(Rect::new(left, y, right, y + 1), line);
     }
 }
 
@@ -301,11 +386,45 @@ fn paint_tool_overlay(
     match editor.tool {
         Tool::Paint | Tool::Rect | Tool::Fill => {
             let cell = ViewState::cell_of(pos);
-            if editor.in_bounds(cell.0, cell.1) {
+            if editor.cell(cell.0, cell.1) != Cell::Outside {
                 canvas.stroke_rect(cell_rect(view, cell), accent, 2.0);
             }
         }
+        Tool::Stamp => {
+            let cell = ViewState::cell_of(pos);
+            match &editor.stamp {
+                // The stamp, ghosted where a click would paste it.
+                Some(stamp) if view.rect_drag.is_none() => {
+                    // Only what a click would paste, and only what shows:
+                    // a stamp can be far larger than the view.
+                    let (l, t, r, b) = visible_cells(editor, view, view.scroller.view());
+                    for y in t.max(cell.1)..b.min(cell.1.saturating_add(stamp.height)) {
+                        for x in l.max(cell.0)..r.min(cell.0.saturating_add(stamp.width)) {
+                            if let Some(id) = stamp.get(x - cell.0, y - cell.1) {
+                                paint_metatile(canvas, editor, view, cache, (x, y), id);
+                            }
+                        }
+                    }
+                    let rect = cells_rect(
+                        view,
+                        (cell.0, cell.1, cell.0 + stamp.width, cell.1 + stamp.height),
+                    );
+                    canvas.fill_rect_rgba(rect, Rgba::with_alpha(accent.r, accent.g, accent.b, 60));
+                    canvas.stroke_rect(rect, accent, 2.0);
+                }
+                _ => {
+                    if editor.cell(cell.0, cell.1) != Cell::Outside {
+                        canvas.stroke_rect(cell_rect(view, cell), accent, 2.0);
+                    }
+                }
+            }
+        }
         Tool::AddObject => {
+            // Objects cannot go in the buffer: no ghost there.
+            let cell = ViewState::cell_of(pos);
+            if !editor.in_bounds(cell.0, cell.1) {
+                return;
+            }
             let ghost = Object {
                 id: editor.new_object.0,
                 variant: editor.new_object.1,

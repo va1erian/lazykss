@@ -94,6 +94,7 @@ fn tool_icon(tool: Tool) -> Lucide {
         Tool::Paint => Lucide::Pencil,
         Tool::Rect => Lucide::RectangleHorizontal,
         Tool::Fill => Lucide::PaintBucket,
+        Tool::Stamp => Lucide::Copy,
         Tool::AddObject => Lucide::Box,
     }
 }
