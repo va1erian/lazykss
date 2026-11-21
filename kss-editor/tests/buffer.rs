@@ -71,6 +71,17 @@ fn compose_in_the_buffer_and_stamp_it_on_the_map() {
             editor.borrow().as_ref().unwrap().room().tiles == before,
             "one undo takes the whole stamp drag back",
         );
+        // The Object tool does nothing in the buffer.
+        s.emit(Msg::SetTool(Tool::AddObject));
+        let objects = editor.borrow().as_ref().unwrap().room().objects.len();
+        mouse_down(s, mid(4, h + 3), MouseButton::Left);
+        mouse_up(s, mid(4, h + 3), MouseButton::Left);
+        check(
+            log,
+            editor.borrow().as_ref().unwrap().room().objects.len() == objects,
+            "no object is placed from the buffer",
+        );
+        s.emit(Msg::SetTool(Tool::Stamp));
         // Leave the ghost showing for the screenshot.
         mouse_move(s, mid(6, 3));
     });

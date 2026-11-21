@@ -42,6 +42,9 @@ pub struct Stamp {
     pub width: i32,
     pub height: i32,
     pub cells: Vec<Option<u16>>,
+    /// The graphics header of the room it was copied in: its tile ids mean
+    /// the same tiles only in a room with the same tileset.
+    pub gfx: [u8; 24],
 }
 
 impl Stamp {
@@ -166,8 +169,41 @@ impl Editor {
             width,
             height,
             cells,
+            gfx: self.room().gfx_header(),
         });
         Some((width, height))
+    }
+
+    /// Whether the stamp was copied in a room with the current room's
+    /// tileset (true when there is no stamp).
+    pub fn stamp_fits_tileset(&self) -> bool {
+        self.stamp
+            .as_ref()
+            .is_none_or(|s| s.gfx == self.room().gfx_header())
+    }
+
+    /// The buffer cells a room of `width` x `height` cells would no longer
+    /// show (under the map, or beyond the margin), emptied.
+    pub(super) fn buffer_cells_hidden_by(&self, width: usize, height: usize) -> Vec<BufferChange> {
+        let w = i32::try_from(width).unwrap_or(i32::MAX);
+        let h = i32::try_from(height).unwrap_or(i32::MAX);
+        let (right, bottom) = (
+            w.saturating_add(BUFFER_MARGIN),
+            h.saturating_add(BUFFER_MARGIN),
+        );
+        self.buffer()
+            .iter()
+            .filter(|&(&(x, y), _)| {
+                let on_map = x >= 0 && y >= 0 && x < w && y < h;
+                let beyond = x >= right || y >= bottom;
+                on_map || beyond
+            })
+            .map(|(&cell, &id)| BufferChange {
+                cell,
+                old: Some(id),
+                new: None,
+            })
+            .collect()
     }
 
     /// Pastes the stamp with its top-left corner at a cell, on the map and

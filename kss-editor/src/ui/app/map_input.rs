@@ -143,6 +143,12 @@ impl EditorApp {
                 }
             }
             Tool::AddObject => {
+                // The buffer is scratch space: an object there would land on
+                // the room's edge, where the user did not click.
+                if !self.ed(|e| e.in_bounds(cell.0, cell.1)).unwrap_or(false) {
+                    self.say("Objects go in the room, not in the buffer around it");
+                    return;
+                }
                 self.ed_mut(|e| e.add_object(pos.0, pos.1));
                 self.after_edit();
                 self.select_object_row();
@@ -166,6 +172,9 @@ impl EditorApp {
             last: cell,
         };
         self.after_stroke();
+        if !self.ed(|e| e.stamp_fits_tileset()).unwrap_or(true) {
+            self.say("The stamp was copied in a room with another tileset: its tiles look different here");
+        }
     }
 
     /// Where a stamp drag that began at `origin` pastes next with the

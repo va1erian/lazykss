@@ -395,11 +395,13 @@ fn paint_tool_overlay(
             match &editor.stamp {
                 // The stamp, ghosted where a click would paste it.
                 Some(stamp) if view.rect_drag.is_none() => {
-                    for dy in 0..stamp.height {
-                        for dx in 0..stamp.width {
-                            if let Some(id) = stamp.get(dx, dy) {
-                                let at = (cell.0 + dx, cell.1 + dy);
-                                paint_metatile(canvas, editor, view, cache, at, id);
+                    // Only what a click would paste, and only what shows:
+                    // a stamp can be far larger than the view.
+                    let (l, t, r, b) = visible_cells(editor, view, view.scroller.view());
+                    for y in t.max(cell.1)..b.min(cell.1.saturating_add(stamp.height)) {
+                        for x in l.max(cell.0)..r.min(cell.0.saturating_add(stamp.width)) {
+                            if let Some(id) = stamp.get(x - cell.0, y - cell.1) {
+                                paint_metatile(canvas, editor, view, cache, (x, y), id);
                             }
                         }
                     }
@@ -418,6 +420,11 @@ fn paint_tool_overlay(
             }
         }
         Tool::AddObject => {
+            // Objects cannot go in the buffer: no ghost there.
+            let cell = ViewState::cell_of(pos);
+            if !editor.in_bounds(cell.0, cell.1) {
+                return;
+            }
             let ghost = Object {
                 id: editor.new_object.0,
                 variant: editor.new_object.1,

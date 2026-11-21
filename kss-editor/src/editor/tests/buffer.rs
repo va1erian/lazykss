@@ -79,3 +79,37 @@ fn a_stamp_copies_from_the_buffer_and_pastes_on_the_map() {
     e.paste_stamp((-2, -2));
     assert_eq!(e.cell(-2, -2), Cell::Buffer(Some(tile)));
 }
+
+#[test]
+fn a_resize_drops_the_buffer_cells_it_hides_and_undo_brings_them_back() {
+    let Some(mut e) = editor() else { return };
+    let (w, h) = (e.room().width, e.room().height);
+    let (wi, hi) = (w as i32, h as i32);
+    e.tile = 0x0C;
+    e.paint(wi + 1, 0); // under the map once it grows by 2
+    e.paint(wi + BUFFER_MARGIN - 1, 0); // beyond the margin once it shrinks
+    e.paint(0, hi + 1); // stays in the buffer either way
+    assert!(e.resize(w + 2, h));
+    assert_eq!(e.buffer().len(), 2, "the cell under the map is gone");
+    e.undo();
+    assert_eq!(e.buffer().len(), 3, "undo restores it with the size");
+    assert!(e.resize(w - 2, h));
+    assert_eq!(e.cell(wi + BUFFER_MARGIN - 1, 0), Cell::Outside);
+    assert!(
+        !e.buffer().contains_key(&(wi + BUFFER_MARGIN - 1, 0)),
+        "no cell is kept beyond the margin"
+    );
+    assert_eq!(e.cell(0, hi + 1), Cell::Buffer(Some(0x0C)));
+}
+
+#[test]
+fn a_stamp_knows_the_tileset_it_was_copied_in() {
+    let Some(mut e) = editor() else { return };
+    assert!(e.stamp_fits_tileset(), "no stamp yet");
+    e.copy_stamp((0, 0), (1, 1));
+    assert!(e.stamp_fits_tileset());
+    if let Some(stamp) = e.stamp.as_mut() {
+        stamp.gfx[0] ^= 0xFF;
+    }
+    assert!(!e.stamp_fits_tileset());
+}

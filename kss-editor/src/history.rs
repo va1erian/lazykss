@@ -141,10 +141,8 @@ impl Change {
 
     /// Whether the change alters what the room image shows.
     pub fn alters_image(&self) -> bool {
-        matches!(
-            self,
-            Change::Tiles(_) | Change::Buffer(_) | Change::Resize { .. }
-        )
+        // Buffer cells are drawn one by one over the view, not baked in.
+        matches!(self, Change::Tiles(_) | Change::Resize { .. })
     }
 
     /// Whether the change touches what is saved (all but the buffer).
