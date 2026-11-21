@@ -1,0 +1,127 @@
+name: Release
+
+# Pushing a tag such as `v1.2.3` or `v1.2.3-beta1` builds the editor for
+# Windows and Linux and publishes both to a GitHub release named after the
+# tag. A tag with a suffix after the version is marked as a pre-release.
+# The tag's X.Y.Z must be kss-editor's version in Cargo.toml.
+#
+# Third-party actions are pinned to commit SHAs: this workflow publishes
+# binaries, so what builds them must not change under a moved tag.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+# Two pushes of the same tag must not race to create one release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Windows draws with Direct2D, Linux with xui's software backend.
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe: kss-editor.exe
+            archive: zip
+          # The oldest supported runner: the binary needs the glibc it was
+          # linked against, and 22.04's 2.35 still runs on Debian 12 and
+          # Ubuntu 22.04.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            exe: kss-editor
+            archive: tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: The tag matches the crate version
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          tagged="${TAG#v}"
+          tagged="${tagged%%-*}"
+          crate=$(grep -m 1 '^version = ' kss-editor/Cargo.toml | cut -d '"' -f 2)
+          if [ "$tagged" != "$crate" ]; then
+            echo "::error::tag $TAG is version $tagged, kss-editor/Cargo.toml says $crate"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          targets: ${{ matrix.target }}
+      # The lock file pins every dependency, xui's git revision included:
+      # a release builds exactly what CI tested.
+      - run: cargo test --locked
+      - run: cargo build --release --locked -p kss-editor --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+          EXE: ${{ matrix.exe }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          name="kss-editor-$TAG-$TARGET"
+          mkdir -p "dist/$name"
+          cp "target/$TARGET/release/$EXE" README.md LICENSE "dist/$name/"
+          cd dist
+          if [ "$ARCHIVE" = zip ]; then
+            7z a -tzip "$name.zip" "$name" > /dev/null
+          else
+            tar -czf "$name.tar.gz" "$name"
+          fi
+          rm -r "$name"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only this job writes: it creates the release and uploads the archives.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS.txt
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          prerelease=()
+          if [[ "$TAG" == *-* ]]; then
+            prerelease=(--prerelease)
+          fi
+          # A re-run of this workflow replaces the archives of the release
+          # the first run created.
+          if gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "$REPO" --clobber
+            exit 0
+          fi
+          gh release create "$TAG" dist/* \
+            --repo "$REPO" \
+            --title "$TAG" \
+            --verify-tag \
+            --generate-notes \
+            "${prerelease[@]}"
