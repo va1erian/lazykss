@@ -231,14 +231,24 @@ python tools/harness/sprites.py --sheet
 ```
 
 places each object alone in room 1, reads what the game put in OAM, and
-traces every 8x8 character and the palette back to ROM addresses. It rewrites
+traces every 8x8 character and the palette back to ROM addresses. It covers
+every room (0-318) and takes about an hour. It rewrites
 `kss-core/src/sprite_table.rs` and saves `target/harness/sprites.png`. Run on
 an unchanged tree, it must reproduce the committed table exactly (`git diff`
 shows nothing): that is the check that the harness still behaves as it did.
+`python tools/harness/sprites.py 0 26` runs Spring Breeze only (about eight
+minutes) but writes a table of only those objects.
+
+The object gets the graphics it needs in up to three ways, cheapest first:
+the object graphics slots of the room it came from, that room's whole
+graphics header, or room 1 made a copy of that room (`own_room_rom`). The
+first that shows a sprite whose characters all trace is used.
 
 Objects it leaves out are listed with the reason. To cover them, the object
-must be made to appear (bosses need their own room) and its characters must
-be in a source the script knows (`SHARED_SHEETS`, the package table).
+must be made to appear (bosses need their arena and markers) and its
+characters must be in a source the script knows (`SHARED_SHEETS`, the package
+table). The Gourmet Race objects do appear in their own room but their
+characters are in no known source.
 
 ## Getting somewhere else in the game
 

@@ -82,22 +82,26 @@ def enter(rom=None, settle=20):
     return e
 
 
-def patch(room, *edits):
+def patch(room, *edits, base=None):
     """Builds a patched ROM with kss-core's own save path and returns its bytes.
 
     `edits` are the arguments of `cargo run -p kss-core --example patch_room`
     after the room number, e.g. `"tile", "3", "6", "3"`. Using the real save
-    pipeline means every experiment also tests it.
+    pipeline means every experiment also tests it. `base` is the path of a ROM
+    to edit instead of the original (e.g. one with a room pointer swapped).
     """
     out = work_dir() / "patched.sfc"
     command = ["cargo", "run", "-q", "-p", "kss-core", "--example", "patch_room", "--", str(out), str(room), *edits]
-    result = subprocess.run(command, cwd=REPO, capture_output=True, text=True, env=_env())
+    result = subprocess.run(command, cwd=REPO, capture_output=True, text=True, env=_env(base))
     if result.returncode != 0:
         raise RuntimeError("patch_room failed:\n" + result.stderr)
     return out.read_bytes()
 
 
-def _env():
+def _env(base=None):
     env = dict(os.environ)
-    env.setdefault("KSS_ROM", str(find_rom()))
+    if base:
+        env["KSS_ROM"] = str(base)
+    else:
+        env.setdefault("KSS_ROM", str(find_rom()))
     return env
