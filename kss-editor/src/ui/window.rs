@@ -361,6 +361,7 @@ pub fn create(ui: &mut Ui<Msg>, rom: Option<PathBuf>, editor: SharedEditor) -> R
                     build(move |ui| MapView::new(ui, map_editor, Msg::Map))
                         .bind(&h.map)
                         .fill(1),
+                    // In this order: `HELP_TAB` is the Help page's index.
                     tabs()
                         .page("Tiles", tiles_tab(&h, &editor))
                         .page("Objects", objects_tab(&h))
@@ -378,6 +379,8 @@ pub fn create(ui: &mut Ui<Msg>, rom: Option<PathBuf>, editor: SharedEditor) -> R
     )?;
 
     ui.on_key(keys::shortcut);
+    // The title bar's close button warns about unsaved edits like File > Exit.
+    ui.on_close(|| Some(Msg::Quit));
 
     let open_dialog = FileDialog::open_file(ui, "Open ROM")?
         .filter("SNES ROM", &["sfc", "smc"])

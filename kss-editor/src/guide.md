@@ -183,8 +183,8 @@ another ROM.
   at the end of a ROM bank. That space is small (about 32 KiB in total): if
   a save fails for lack of room, shrink some edits.
 - The ROM checksum is fixed on every save.
-- **Open ROM** and **Exit** warn once about unsaved changes; choose them
-  again to discard the changes.
+- **Open ROM**, **Exit** and the window's close button warn once about
+  unsaved changes; do it again to discard the changes.
 
 **Always test a saved ROM in an emulator** before building on it.
 
@@ -212,7 +212,7 @@ another ROM.
 | F1 | Show this guide |
 | V B R G O | Select, Paint, Rect, Fill, Object tool (map focused) |
 | 1-4 | Zoom 1x to 4x (map focused) |
-| Arrows / Shift+arrows | Nudge the selected object 1 / 8 px |
-| Delete, Backspace | Delete the selected object, else the selected door |
-| Esc | Deselect, cancel a rectangle |
+| Arrows / Shift+arrows | Nudge the selected object 1 / 8 px (map focused) |
+| Delete, Backspace | Delete the selected object, else the selected door (map focused) |
+| Esc | Deselect, cancel a rectangle (map focused) |
 | Right-click, Alt+click | Pick the tile under the pointer (tile tools) |
