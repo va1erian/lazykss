@@ -3,6 +3,10 @@ name: Release
 # Pushing a tag such as `v1.2.3` or `v1.2.3-beta1` builds the editor for
 # Windows and Linux and publishes both to a GitHub release named after the
 # tag. A tag with a suffix after the version is marked as a pre-release.
+# The tag's X.Y.Z must be kss-editor's version in Cargo.toml.
+#
+# Third-party actions are pinned to commit SHAs: this workflow publishes
+# binaries, so what builds them must not change under a moved tag.
 on:
   push:
     tags:
@@ -32,14 +36,29 @@ jobs:
             target: x86_64-pc-windows-msvc
             exe: kss-editor.exe
             archive: zip
-          - os: ubuntu-latest
+          # The oldest supported runner: the binary needs the glibc it was
+          # linked against, and 22.04's 2.35 still runs on Debian 12 and
+          # Ubuntu 22.04.
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             exe: kss-editor
             archive: tar.gz
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: The tag matches the crate version
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          tagged="${TAG#v}"
+          tagged="${tagged%%-*}"
+          crate=$(grep -m 1 '^version = ' kss-editor/Cargo.toml | cut -d '"' -f 2)
+          if [ "$tagged" != "$crate" ]; then
+            echo "::error::tag $TAG is version $tagged, kss-editor/Cargo.toml says $crate"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: ${{ matrix.target }}
       # The lock file pins every dependency, xui's git revision included:
@@ -64,7 +83,7 @@ jobs:
             tar -czf "$name.tar.gz" "$name"
           fi
           rm -r "$name"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.target }}
           path: dist/*
@@ -77,7 +96,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true

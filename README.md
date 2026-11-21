@@ -31,7 +31,9 @@ The GUI is built on [xui](https://github.com/va1erian/xui).
 Pushing a tag `vX.Y.Z` (or `vX.Y.Z-suffix`, published as a pre-release) runs
 `.github/workflows/release.yml`: it tests and builds the editor for Windows
 and Linux (x86-64) and attaches the archives, with their SHA-256 sums, to a
-GitHub release named after the tag.
+GitHub release named after the tag. The tag's `X.Y.Z` must match the
+version in `kss-editor/Cargo.toml`, and the tag should be on a commit of
+`main` that passed CI: the workflow publishes whatever commit it names.
 
 ```text
 git tag v0.2.0-beta1 && git push origin v0.2.0-beta1
