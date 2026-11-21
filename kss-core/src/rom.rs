@@ -56,7 +56,10 @@ impl Rom {
                 data.len()
             )));
         }
-        if &data[TITLE_OFFSET..TITLE_OFFSET + TITLE.len()] != TITLE {
+        if !data
+            .get(TITLE_OFFSET..)
+            .is_some_and(|rest| rest.starts_with(TITLE))
+        {
             return Err(RomError::NotKirbySuperStar(
                 "internal title does not match".into(),
             ));
@@ -103,52 +106,91 @@ impl Rom {
         &self.data
     }
 
+    /// The byte at `offset`, 0 past the end of the image. A convenience for
+    /// offsets known to be inside it: a parser of offsets read from the ROM
+    /// checks them first, as `room` does with its own bounds-checked reads.
     pub fn u8(&self, offset: usize) -> u8 {
-        self.data[offset]
+        self.data.get(offset).copied().unwrap_or(0)
     }
 
+    /// The little-endian word at `offset`, 0 when it is not entirely inside
+    /// the image.
     pub fn u16(&self, offset: usize) -> u16 {
-        u16::from_le_bytes([self.data[offset], self.data[offset + 1]])
+        self.bytes::<2>(offset).map_or(0, u16::from_le_bytes)
+    }
+
+    /// `N` bytes at `offset`, when they are all inside the image.
+    fn bytes<const N: usize>(&self, offset: usize) -> Option<[u8; N]> {
+        self.data.get(offset..)?.first_chunk::<N>().copied()
     }
 
     /// Reads a 3-byte SNES long pointer and converts it to a file offset.
-    /// `None` when it does not point into the `C0-FF` image.
+    /// `None` when it does not point into the `C0-FF` image, or when the
+    /// pointer itself is not inside the image.
     pub fn long_pointer(&self, offset: usize) -> Option<usize> {
-        let snes = self.data[offset] as usize
-            | (self.data[offset + 1] as usize) << 8
-            | (self.data[offset + 2] as usize) << 16;
+        let [low, high, bank] = self.bytes::<3>(offset)?;
+        let snes = usize::from(low) | usize::from(high) << 8 | usize::from(bank) << 16;
         snes.checked_sub(0xC0_0000)
             .filter(|&pc| pc < self.data.len())
     }
 
+    /// `len` bytes at `offset`; empty when the range leaves the image.
     pub fn slice(&self, offset: usize, len: usize) -> &[u8] {
-        &self.data[offset..offset + len]
+        self.data
+            .get(offset..)
+            .and_then(|rest| rest.get(..len))
+            .unwrap_or_default()
     }
 
-    pub fn write(&mut self, offset: usize, bytes: &[u8]) {
-        self.data[offset..offset + bytes.len()].copy_from_slice(bytes);
+    /// Overwrites bytes at `offset`. Returns false, with nothing written,
+    /// when the bytes would leave the image.
+    #[must_use]
+    pub fn write(&mut self, offset: usize, bytes: &[u8]) -> bool {
+        let Some(target) = self
+            .data
+            .get_mut(offset..)
+            .and_then(|rest| rest.get_mut(..bytes.len()))
+        else {
+            return false;
+        };
+        target.copy_from_slice(bytes);
+        true
     }
 
-    pub fn write_long_pointer(&mut self, offset: usize, pc: usize) {
-        let snes = pc + 0xC0_0000;
-        self.write(offset, &[snes as u8, (snes >> 8) as u8, (snes >> 16) as u8]);
+    /// Writes a 3-byte SNES long pointer to file offset `pc`. Returns
+    /// false, with nothing written, when `pc` is outside the image (no
+    /// pointer can reach it) or the pointer itself would leave it.
+    #[must_use]
+    pub fn write_long_pointer(&mut self, offset: usize, pc: usize) -> bool {
+        let Some(snes) = pc_to_snes(pc) else {
+            return false;
+        };
+        let [low, high, bank, ..] = snes.to_le_bytes();
+        self.write(offset, &[low, high, bank])
     }
 
     /// Recomputes the internal checksum pair (sum of all bytes mod 0x10000,
     /// taken with the checksum fields at their neutral `FFFF`/`0000` values).
     pub fn fix_checksum(&mut self) {
-        self.write(CHECKSUM_COMPLEMENT, &[0xFF, 0xFF, 0x00, 0x00]);
+        // The header fields are inside every image `Rom::new` accepts, so
+        // these writes cannot be refused.
+        let _ = self.write(CHECKSUM_COMPLEMENT, &[0xFF, 0xFF, 0x00, 0x00]);
         let sum = self
             .data
             .iter()
             .fold(0u16, |acc, &b| acc.wrapping_add(b as u16));
-        self.write(CHECKSUM, &sum.to_le_bytes());
-        self.write(CHECKSUM_COMPLEMENT, &(!sum).to_le_bytes());
+        let _ = self.write(CHECKSUM, &sum.to_le_bytes());
+        let _ = self.write(CHECKSUM_COMPLEMENT, &(!sum).to_le_bytes());
     }
 
     pub fn checksum(&self) -> u16 {
         self.u16(CHECKSUM)
     }
+}
+
+/// Converts a file offset to its SNES `C0-FF` address.
+fn pc_to_snes(pc: usize) -> Option<usize> {
+    (pc < ROM_SIZE).then_some(pc | 0xC0_0000)
 }
 
 /// Converts an SNES `C0-FF` address to a file offset.
@@ -165,6 +207,31 @@ mod tests {
         assert_eq!(snes_to_pc(0xFF_0000), Some(0x3F_0000));
         assert_eq!(snes_to_pc(0xF0_20EF), Some(0x30_20EF));
         assert_eq!(snes_to_pc(0x00_8000), None);
+        assert_eq!(pc_to_snes(0x3F_0000), Some(0xFF_0000));
+        assert_eq!(pc_to_snes(ROM_SIZE), None);
+    }
+
+    #[test]
+    fn reads_and_writes_past_the_end_do_not_panic() {
+        let mut data = vec![0; ROM_SIZE];
+        data[TITLE_OFFSET..TITLE_OFFSET + TITLE.len()].copy_from_slice(TITLE);
+        let mut rom = Rom::new(data).unwrap();
+        let end = ROM_SIZE - 1;
+        assert!(rom.write(end, &[0xAB]));
+        assert_eq!(rom.u8(end), 0xAB);
+        assert_eq!(rom.u16(end), 0);
+        assert_eq!(rom.u8(usize::MAX), 0);
+        assert_eq!(rom.long_pointer(end - 1), None);
+        assert!(rom.slice(end, 2).is_empty());
+        assert!(rom.slice(usize::MAX, 2).is_empty());
+        assert!(!rom.write(end, &[1, 2]));
+        assert!(!rom.write(usize::MAX, &[1]));
+        assert!(!rom.write_long_pointer(0, ROM_SIZE));
+        assert!(!rom.write_long_pointer(end, 0));
+        assert_eq!(rom.u8(end), 0xAB);
+        assert_eq!(rom.slice(0, 3), [0, 0, 0]);
+        assert!(rom.write_long_pointer(0, 0x12_3456));
+        assert_eq!(rom.long_pointer(0), Some(0x12_3456));
     }
 
     #[test]

@@ -16,7 +16,7 @@
 //! uses is recorded in the generated [`sprite_table`](super::sprite_table).
 
 use crate::compression;
-use crate::gfx::{Image, bgr555};
+use crate::gfx::{CHAR_BYTES, Image, bgr555, char_pixels, decode_char, le_words};
 use crate::rom::Rom;
 use crate::sprite_table::{Colors, OBJECTS, PALETTES, Piece, SOURCES};
 
@@ -43,7 +43,10 @@ impl ObjectSprites {
         let sources: Vec<Vec<u8>> = SOURCES
             .iter()
             .map(|&(offset, _)| {
-                compression::decompress(&rom.data()[offset as usize..])
+                usize::try_from(offset)
+                    .ok()
+                    .and_then(|at| rom.data().get(at..))
+                    .and_then(|data| compression::decompress(data).ok())
                     .map(|(data, _)| data)
                     .unwrap_or_default()
             })
@@ -77,19 +80,51 @@ impl ObjectSprites {
     }
 }
 
+/// `len` bytes at `at` of `data`, when they are all there.
+fn span(data: &[u8], at: usize, len: usize) -> Option<&[u8]> {
+    data.get(at..)?.get(..len)
+}
+
+/// Bytes of the 15 colours of a palette.
+const COLOR_BYTES: usize = 30;
+/// Bytes of one package palette: `0F`, the CGRAM index, then the colours.
+const PACKAGE_PALETTE: usize = 32;
+/// Where the colours of package palette 0 start: after the slot class byte
+/// and the two leading bytes of the palette.
+const PACKAGE_COLORS: usize = 3;
+
 fn colors(rom: &Rom, sources: &[Vec<u8>], colors: Colors) -> Option<[[u8; 4]; 16]> {
     let words: &[u8] = match colors {
         Colors::Package { source, index } => {
-            let at = 3 + 32 * index as usize;
-            sources[source as usize].get(at..at + 30)?
+            let at = usize::from(index)
+                .checked_mul(PACKAGE_PALETTE)?
+                .checked_add(PACKAGE_COLORS)?;
+            span(sources.get(usize::from(source))?, at, COLOR_BYTES)?
         }
-        Colors::Raw(offset) => rom.data().get(offset as usize..offset as usize + 30)?,
+        Colors::Raw(offset) => span(rom.data(), usize::try_from(offset).ok()?, COLOR_BYTES)?,
     };
+    // Entry 0 is transparent: the stored colours are entries 1 to 15.
     let mut palette = [[0u8; 4]; 16];
-    for (color, word) in palette[1..].iter_mut().zip(words.chunks_exact(2)) {
-        *color = bgr555(u16::from_le_bytes([word[0], word[1]]));
+    for (color, word) in palette.iter_mut().skip(1).zip(le_words(words)) {
+        *color = bgr555(word);
     }
     Some(palette)
+}
+
+/// The box the pieces cover: left, top, right and bottom edges, in pixels
+/// from the object's position.
+fn bounds(pieces: &[Piece]) -> Option<(i32, i32, i32, i32)> {
+    let left = i32::from(pieces.iter().map(|p| p.0).min()?);
+    let top = i32::from(pieces.iter().map(|p| p.1).min()?);
+    // Each piece is one 8x8 character; i16 offsets plus 8 always fit i32.
+    let right = i32::from(pieces.iter().map(|p| p.0).max()?).saturating_add(8);
+    let bottom = i32::from(pieces.iter().map(|p| p.1).max()?).saturating_add(8);
+    Some((left, top, right, bottom))
+}
+
+/// Distance from `origin` to `at`, when `at` is not before it.
+fn distance(at: i16, origin: i32) -> Option<usize> {
+    usize::try_from(i32::from(at).saturating_sub(origin)).ok()
 }
 
 fn render(
@@ -97,43 +132,29 @@ fn render(
     palettes: &[Option<[[u8; 4]; 16]>],
     pieces: &[Piece],
 ) -> Option<Sprite> {
-    let left = pieces.iter().map(|p| p.0).min()? as i32;
-    let top = pieces.iter().map(|p| p.1).min()? as i32;
-    let right = pieces.iter().map(|p| p.0).max()? as i32 + 8;
-    let bottom = pieces.iter().map(|p| p.1).max()? as i32 + 8;
-    let mut image = Image::new((right - left) as usize, (bottom - top) as usize);
+    let (left, top, right, bottom) = bounds(pieces)?;
+    let width = usize::try_from(right.saturating_sub(left)).ok()?;
+    let height = usize::try_from(bottom.saturating_sub(top)).ok()?;
+    let mut image = Image::new(width, height);
     // The first piece is in front: draw back to front.
     for &(dx, dy, flip, source, character, palette) in pieces.iter().rev() {
-        let palette = palettes[palette as usize].as_ref()?;
-        let start = SOURCES[source as usize].1 as usize + character as usize * 32;
-        let tile = sources[source as usize].get(start..start + 32)?;
-        for y in 0..8usize {
-            let row = if flip & 2 != 0 { 7 - y } else { y };
-            let planes = [
-                tile[row * 2],
-                tile[row * 2 + 1],
-                tile[16 + row * 2],
-                tile[17 + row * 2],
-            ];
-            for x in 0..8usize {
-                let shift = if flip & 1 != 0 { x } else { 7 - x };
-                let value = planes
-                    .iter()
-                    .enumerate()
-                    .fold(0, |acc, (bit, p)| acc | ((p >> shift) & 1) << bit);
-                if value != 0 {
-                    let px = (dx as i32 - left) as usize + x;
-                    let py = (dy as i32 - top) as usize + y;
-                    let at = (py * image.width + px) * 4;
-                    image.rgba[at..at + 4].copy_from_slice(&palette[value as usize]);
-                }
+        let palette = palettes.get(usize::from(palette))?.as_ref()?;
+        let source = usize::from(source);
+        let start = usize::from(character)
+            .checked_mul(CHAR_BYTES)?
+            .checked_add(SOURCES.get(source)?.1.into())?;
+        let char = decode_char(sources.get(source)?.get(start..)?)?;
+        let (x0, y0) = (distance(dx, left)?, distance(dy, top)?);
+        for (x, y, value) in char_pixels(&char, flip & 1 != 0, flip & 2 != 0) {
+            if let Some(&color) = palette.get(usize::from(value)).filter(|_| value != 0) {
+                image.put(x0.saturating_add(x), y0.saturating_add(y), color);
             }
         }
     }
     Some(Sprite {
         image,
-        origin_x: -left,
-        origin_y: -top,
+        origin_x: left.saturating_neg(),
+        origin_y: top.saturating_neg(),
     })
 }
 

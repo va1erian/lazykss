@@ -117,7 +117,10 @@ impl<M: 'static> Placeable<M> for TilePicker<M> {
 /// The tile id under a node point, if any.
 fn tile_at(st: &State, count: usize, x: i32, y: i32) -> Option<u16> {
     let (ox, oy) = st.scroller.offset;
-    let (cx, cy) = ((x + ox) / CELL as i32, (y + oy) / CELL as i32);
+    let (cx, cy) = (
+        x.saturating_add(ox) / CELL as i32,
+        y.saturating_add(oy) / CELL as i32,
+    );
     if x < 0 || y < 0 || cx as usize >= COLUMNS {
         return None;
     }

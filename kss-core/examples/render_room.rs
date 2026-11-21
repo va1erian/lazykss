@@ -26,14 +26,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let pixel = sprite.image.pixel(x, y);
                     let px = object.x as i32 - sprite.origin_x + x as i32;
                     let py = object.y as i32 - sprite.origin_y + y as i32;
-                    if pixel[3] != 0
-                        && px >= 0
-                        && py >= 0
-                        && (px as usize) < image.width
-                        && (py as usize) < image.height
+                    // `put` drops pixels outside the image.
+                    if let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py))
+                        && pixel[3] != 0
                     {
-                        let at = (py as usize * image.width + px as usize) * 4;
-                        image.rgba[at..at + 4].copy_from_slice(&pixel);
+                        image.put(px, py, pixel);
                     }
                 }
             }
@@ -41,9 +38,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut file =
             std::io::BufWriter::new(std::fs::File::create(out.join(format!("room{index}.ppm")))?);
         write!(file, "P6\n{} {}\n255\n", image.width, image.height)?;
-        for pixel in image.rgba.chunks_exact(4) {
-            file.write_all(&pixel[..3])?;
-        }
+        let rgb: Vec<u8> = image
+            .rgba
+            .chunks_exact(4)
+            .flat_map(|pixel| pixel.iter().take(3))
+            .copied()
+            .collect();
+        file.write_all(&rgb)?;
         println!(
             "room {index}: {}x{} cells, {} objects",
             room.width,
