@@ -103,9 +103,29 @@ impl Layer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gesture {
     Idle,
-    Paint { last: (i32, i32) },
-    Rect { start: (i32, i32) },
-    Move { index: usize, dx: i32, dy: i32 },
+    /// Painting, or emptying buffer cells when `erase`.
+    Paint {
+        last: (i32, i32),
+        erase: bool,
+    },
+    Rect {
+        start: (i32, i32),
+    },
+    /// Choosing the cells the stamp tool copies.
+    Copy {
+        start: (i32, i32),
+    },
+    /// Pasting the stamp: first at `origin`, then wherever a whole stamp
+    /// fits from there as the pointer moves, so a drag repeats the motif.
+    Stamp {
+        origin: (i32, i32),
+        last: (i32, i32),
+    },
+    Move {
+        index: usize,
+        dx: i32,
+        dy: i32,
+    },
 }
 
 /// Handles of every widget the app updates after the layout is mounted.
@@ -331,6 +351,14 @@ impl EditorApp {
         }
         let zoom = self.h.map.get().view().zoom;
         let tool = self.ed(|e| e.tool).unwrap_or(Tool::Select);
+        if tool == Tool::Stamp && button == MouseButton::Right {
+            self.gesture = Gesture::Copy { start: cell };
+            self.h
+                .map
+                .get()
+                .update_view(|v| v.rect_drag = Some((cell, cell)));
+            return;
+        }
         let tile_tool = matches!(tool, Tool::Paint | Tool::Rect | Tool::Fill);
         // Right-click, or Alt+click with the paint tool, picks the tile.
         if (button == MouseButton::Right && tile_tool) || (mods.alt && tool == Tool::Paint) {
@@ -386,11 +414,31 @@ impl EditorApp {
                 self.h.map.get().invalidate();
             }
             Tool::Paint => {
+                let erase = mods.shift;
                 self.ed_mut(|e| {
                     e.begin_group();
-                    e.paint(cell.0, cell.1);
+                    if erase {
+                        e.erase(cell.0, cell.1);
+                    } else {
+                        e.paint(cell.0, cell.1);
+                    }
                 });
-                self.gesture = Gesture::Paint { last: cell };
+                self.gesture = Gesture::Paint { last: cell, erase };
+                self.after_stroke();
+            }
+            Tool::Stamp => {
+                if self.ed(|e| e.stamp.is_none()).unwrap_or(true) {
+                    self.say("Nothing to paste: right-drag over cells to copy them first");
+                    return;
+                }
+                self.ed_mut(|e| {
+                    e.begin_group();
+                    e.paste_stamp(cell);
+                });
+                self.gesture = Gesture::Stamp {
+                    origin: cell,
+                    last: cell,
+                };
                 self.after_stroke();
             }
             Tool::Rect => {
@@ -417,18 +465,39 @@ impl EditorApp {
 
     fn drag(&mut self, cell: (i32, i32), pos: (i32, i32)) {
         match self.gesture {
-            Gesture::Paint { last } => {
+            Gesture::Paint { last, erase } => {
                 if cell != last {
                     self.ed_mut(|e| {
                         for (x, y) in line_cells(last, cell) {
-                            e.paint(x, y);
+                            if erase {
+                                e.erase(x, y);
+                            } else {
+                                e.paint(x, y);
+                            }
                         }
                     });
-                    self.gesture = Gesture::Paint { last: cell };
+                    self.gesture = Gesture::Paint { last: cell, erase };
                     self.after_stroke();
                 }
             }
-            Gesture::Rect { start } => {
+            Gesture::Stamp { origin, last } => {
+                let size = self
+                    .ed(|e| e.stamp.as_ref().map(|s| (s.width, s.height)))
+                    .flatten();
+                if let Some((w, h)) = size {
+                    // Snap to the stamp's own grid from where the drag began.
+                    let at = (
+                        origin.0 + (cell.0 - origin.0).div_euclid(w) * w,
+                        origin.1 + (cell.1 - origin.1).div_euclid(h) * h,
+                    );
+                    if at != last {
+                        self.ed_mut(|e| e.paste_stamp(at));
+                        self.gesture = Gesture::Stamp { origin, last: at };
+                        self.after_stroke();
+                    }
+                }
+            }
+            Gesture::Rect { start } | Gesture::Copy { start } => {
                 self.h
                     .map
                     .get()
@@ -446,9 +515,19 @@ impl EditorApp {
 
     fn release(&mut self, cell: (i32, i32)) {
         match std::mem::replace(&mut self.gesture, Gesture::Idle) {
-            Gesture::Paint { .. } => {
+            Gesture::Paint { .. } | Gesture::Stamp { .. } => {
                 self.ed_mut(|e| e.end_group());
                 self.after_stroke();
+            }
+            Gesture::Copy { start } => {
+                let size = self.ed_mut(|e| e.copy_stamp(start, cell)).flatten();
+                self.h.map.get().update_view(|v| v.rect_drag = None);
+                match size {
+                    Some((w, h)) => self.say(&format!(
+                        "Copied {w}x{h} cells: click to paste, drag to repeat"
+                    )),
+                    None => self.say("Nothing copied: those cells are empty"),
+                }
             }
             Gesture::Rect { start } => {
                 let n = self.ed_mut(|e| e.fill_rect(start, cell)).unwrap_or(0);

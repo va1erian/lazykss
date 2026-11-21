@@ -3,8 +3,33 @@
 //! A [`Change`] knows how to apply itself to a [`Room`] and how to take
 //! itself back. The editor stores groups of changes (a drag stroke is one
 //! group); undoing a group reverts its changes in reverse order.
+//!
+//! A room also has a scratch [`Buffer`]: cells around the map that the user
+//! draws on but that are never saved. Its edits are undoable like the rest
+//! but do not mark the room as modified.
+
+use std::collections::BTreeMap;
 
 use kss_core::{Block, Door, Object, Room};
+
+/// Scratch cells around a room, by cell position (outside the map), for
+/// composing motifs. Never written to the ROM.
+pub type Buffer = BTreeMap<(i32, i32), u16>;
+
+/// One cell of a [`Change::Buffer`]; `None` is an empty cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BufferChange {
+    pub cell: (i32, i32),
+    pub old: Option<u16>,
+    pub new: Option<u16>,
+}
+
+fn put(buffer: &mut Buffer, cell: (i32, i32), value: Option<u16>) {
+    match value {
+        Some(id) => buffer.insert(cell, id),
+        None => buffer.remove(&cell),
+    };
+}
 
 /// One cell of a [`Change::Tiles`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +78,8 @@ impl MapSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
     Tiles(Vec<TileChange>),
+    /// Cells of the scratch buffer.
+    Buffer(Vec<BufferChange>),
     AddObject {
         index: usize,
         object: Object,
@@ -103,14 +130,27 @@ impl Change {
 
     /// Whether the change alters what the room image shows.
     pub fn alters_image(&self) -> bool {
-        matches!(self, Change::Tiles(_) | Change::Resize { .. })
+        matches!(
+            self,
+            Change::Tiles(_) | Change::Buffer(_) | Change::Resize { .. }
+        )
     }
 
-    pub fn apply(&self, room: &mut Room) {
+    /// Whether the change touches what is saved (all but the buffer).
+    pub fn modifies_room(&self) -> bool {
+        !matches!(self, Change::Buffer(_))
+    }
+
+    pub fn apply(&self, room: &mut Room, buffer: &mut Buffer) {
         match self {
             Change::Tiles(cells) => {
                 for c in cells {
                     room.tiles[c.index] = c.new;
+                }
+            }
+            Change::Buffer(cells) => {
+                for c in cells {
+                    put(buffer, c.cell, c.new);
                 }
             }
             Change::AddObject { index, object } => room
@@ -140,11 +180,16 @@ impl Change {
         }
     }
 
-    pub fn revert(&self, room: &mut Room) {
+    pub fn revert(&self, room: &mut Room, buffer: &mut Buffer) {
         match self {
             Change::Tiles(cells) => {
                 for c in cells.iter().rev() {
                     room.tiles[c.index] = c.old;
+                }
+            }
+            Change::Buffer(cells) => {
+                for c in cells.iter().rev() {
+                    put(buffer, c.cell, c.old);
                 }
             }
             Change::AddObject { index, .. } => {
@@ -181,6 +226,10 @@ impl Change {
     pub fn merge(&mut self, next: Change) -> Option<Change> {
         match (self, next) {
             (Change::Tiles(a), Change::Tiles(b)) => {
+                a.extend(b);
+                None
+            }
+            (Change::Buffer(a), Change::Buffer(b)) => {
                 a.extend(b);
                 None
             }

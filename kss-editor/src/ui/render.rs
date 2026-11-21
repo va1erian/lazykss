@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use kss_core::{Image as Raw, ObjectSprites};
+use kss_core::{Image as Raw, ObjectSprites, Tileset};
 use xui::image::Image;
 
 /// A whole `kss-core` image as an xui image.
@@ -23,6 +23,10 @@ pub struct RoomImages {
     session: u64,
     /// Object sprites by `(id, variant)`, converted on first use.
     sprites: HashMap<(u8, u8), Option<Image>>,
+    /// The session and room the metatiles below were drawn from.
+    tiles_key: (u64, usize),
+    /// Single metatiles, for the buffer and the stamp, converted on first use.
+    tiles: HashMap<u16, Option<Image>>,
 }
 
 impl RoomImages {
@@ -32,6 +36,8 @@ impl RoomImages {
             key: u64::MAX,
             session: u64::MAX,
             sprites: HashMap::new(),
+            tiles_key: (u64::MAX, usize::MAX),
+            tiles: HashMap::new(),
         }
     }
 
@@ -41,6 +47,19 @@ impl RoomImages {
             self.session = session;
             self.sprites.clear();
         }
+    }
+
+    /// One metatile of the room `key` (session, room index) on a
+    /// transparent background.
+    pub fn metatile(&mut self, key: (u64, usize), tileset: &Tileset, id: u16) -> Option<&Image> {
+        if self.tiles_key != key {
+            self.tiles_key = key;
+            self.tiles.clear();
+        }
+        self.tiles
+            .entry(id)
+            .or_insert_with(|| to_xui(&tileset.metatile(id)))
+            .as_ref()
     }
 
     /// Replaces the room image.

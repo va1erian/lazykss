@@ -4,14 +4,17 @@
 //! into calls on [`Editor`]; every call that changes a room is undoable and
 //! marks the room as modified.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use kss_core::names::{DOOR_STAR, TREASURE_CHEST, WARP_STAR};
 use kss_core::room::{Destination, GREAT_CAVE_OFFENSIVE, MAX_CELLS, MAX_DOORS, NAMED_LEVELS};
 use kss_core::{CELL, Door, Level, Object, ObjectSprites, Rom, Room, SaveReport, Tables, Tileset};
 
-use crate::history::{Change, Entry, MapSnapshot, TileChange};
+use crate::history::{Buffer, BufferChange, Change, Entry, MapSnapshot, TileChange};
+
+/// How far the scratch buffer reaches around a room, in cells.
+pub const BUFFER_MARGIN: i32 = 16;
 
 /// The active editing tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,15 +23,17 @@ pub enum Tool {
     Paint,
     Rect,
     Fill,
+    Stamp,
     AddObject,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 5] = [
+    pub const ALL: [Tool; 6] = [
         Tool::Select,
         Tool::Paint,
         Tool::Rect,
         Tool::Fill,
+        Tool::Stamp,
         Tool::AddObject,
     ];
 
@@ -38,6 +43,7 @@ impl Tool {
             Tool::Paint => "Paint",
             Tool::Rect => "Rect",
             Tool::Fill => "Fill",
+            Tool::Stamp => "Stamp",
             Tool::AddObject => "Object",
         }
     }
@@ -45,9 +51,12 @@ impl Tool {
     pub fn hint(self) -> &'static str {
         match self {
             Tool::Select => "Select / move objects (V)",
-            Tool::Paint => "Paint tiles; right-click or Alt+click picks (B)",
+            Tool::Paint => {
+                "Paint tiles; right-click or Alt+click picks, Shift erases the buffer (B)"
+            }
             Tool::Rect => "Fill a rectangle of cells (R)",
             Tool::Fill => "Flood fill (G)",
+            Tool::Stamp => "Stamp: right-drag copies cells, click or drag pastes them (S)",
             Tool::AddObject => "Place a new object (O)",
         }
     }
@@ -65,6 +74,49 @@ pub struct LoadedRoom {
     pub undo: Vec<Entry>,
     pub redo: Vec<Entry>,
     pub dirty: bool,
+    /// Scratch cells drawn around the map; never saved.
+    pub buffer: Buffer,
+}
+
+/// What a cell position holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cell {
+    /// A cell of the room's map.
+    Room(u16),
+    /// A cell of the scratch buffer around the map, maybe empty.
+    Buffer(Option<u16>),
+    /// Beyond the buffer.
+    Outside,
+}
+
+impl Cell {
+    /// The tile shown there, if any.
+    pub fn tile(self) -> Option<u16> {
+        match self {
+            Cell::Room(id) => Some(id),
+            Cell::Buffer(id) => id,
+            Cell::Outside => None,
+        }
+    }
+}
+
+/// A rectangle of cells copied by the stamp tool, row-major; `None` cells
+/// (empty buffer cells) leave what is under them when pasted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stamp {
+    pub width: i32,
+    pub height: i32,
+    pub cells: Vec<Option<u16>>,
+}
+
+impl Stamp {
+    /// The cell at an offset from the stamp's top-left corner.
+    pub fn get(&self, dx: i32, dy: i32) -> Option<u16> {
+        if dx < 0 || dy < 0 || dx >= self.width || dy >= self.height {
+            return None;
+        }
+        self.cells[(dy * self.width + dx) as usize]
+    }
 }
 
 /// A treasure chest placed in a room.
@@ -132,6 +184,8 @@ pub struct Editor {
     pub new_object: (u8, u8),
     pub selected_object: Option<usize>,
     pub selected_door: Option<usize>,
+    /// The cells the stamp tool pastes, shared by every room.
+    pub stamp: Option<Stamp>,
     group: Option<Entry>,
 }
 
@@ -217,6 +271,7 @@ impl Editor {
             new_object: (0x01, 0),
             selected_object: None,
             selected_door: None,
+            stamp: None,
             group: None,
         };
         // The named levels are listed with their sizes, and the treasure
@@ -333,6 +388,7 @@ impl Editor {
                 undo: Vec::new(),
                 redo: Vec::new(),
                 dirty: false,
+                buffer: Buffer::new(),
             },
         );
         Ok(())
@@ -441,11 +497,11 @@ impl Editor {
     fn perform(&mut self, change: Change) {
         let in_group = self.group.is_some();
         let lr = self.cur_mut();
-        change.apply(&mut lr.room);
+        change.apply(&mut lr.room, &mut lr.buffer);
         if change.alters_image() {
             lr.revision += 1;
         }
-        lr.dirty = true;
+        lr.dirty |= change.modifies_room();
         lr.redo.clear();
         if in_group {
             let group = self.group.as_mut().expect("checked");
@@ -469,15 +525,15 @@ impl Editor {
             return false;
         };
         for change in entry.iter().rev() {
-            change.revert(&mut lr.room);
+            change.revert(&mut lr.room, &mut lr.buffer);
             if change.alters_image() {
                 lr.revision += 1;
             }
         }
         let reordered = entry.iter().any(Change::reorders_objects);
         let doors = entry.iter().any(Change::reorders_doors);
+        lr.dirty |= entry.iter().any(Change::modifies_room);
         lr.redo.push(entry);
-        lr.dirty = true;
         if reordered {
             // The selected index may now name another object.
             self.selected_object = None;
@@ -496,15 +552,15 @@ impl Editor {
             return false;
         };
         for change in &entry {
-            change.apply(&mut lr.room);
+            change.apply(&mut lr.room, &mut lr.buffer);
             if change.alters_image() {
                 lr.revision += 1;
             }
         }
         let reordered = entry.iter().any(Change::reorders_objects);
         let doors = entry.iter().any(Change::reorders_doors);
+        lr.dirty |= entry.iter().any(Change::modifies_room);
         lr.undo.push(entry);
-        lr.dirty = true;
         if reordered {
             self.selected_object = None;
         }
@@ -533,26 +589,97 @@ impl Editor {
         x >= 0 && y >= 0 && (x as usize) < r.width && (y as usize) < r.height
     }
 
+    /// The tile of a map cell, `None` off the map.
     pub fn tile_at(&self, x: i32, y: i32) -> Option<u16> {
         self.in_bounds(x, y)
             .then(|| self.room().tile(x as usize, y as usize))
     }
 
-    /// Sets one cell to `id`. Returns whether it changed.
-    pub fn set_tile(&mut self, x: i32, y: i32, id: u16) -> bool {
-        let Some(old) = self.tile_at(x, y) else {
-            return false;
-        };
-        if old == id {
-            return false;
+    /// The cells the map and its buffer cover: `(left, top, right, bottom)`,
+    /// right and bottom exclusive.
+    pub fn canvas_cells(&self) -> (i32, i32, i32, i32) {
+        let (w, h) = (self.room().width as i32, self.room().height as i32);
+        (
+            -BUFFER_MARGIN,
+            -BUFFER_MARGIN,
+            w + BUFFER_MARGIN,
+            h + BUFFER_MARGIN,
+        )
+    }
+
+    /// What a cell position holds: the map, the buffer around it, or nothing.
+    pub fn cell(&self, x: i32, y: i32) -> Cell {
+        if let Some(id) = self.tile_at(x, y) {
+            return Cell::Room(id);
         }
-        let index = y as usize * self.room().width + x as usize;
-        self.perform(Change::Tiles(vec![TileChange {
-            index,
-            old,
-            new: id,
-        }]));
-        true
+        let (l, t, r, b) = self.canvas_cells();
+        if x >= l && y >= t && x < r && y < b {
+            Cell::Buffer(self.cur().buffer.get(&(x, y)).copied())
+        } else {
+            Cell::Outside
+        }
+    }
+
+    /// The scratch buffer of the current room. Cells now under the map (the
+    /// room grew) are kept but hidden.
+    pub fn buffer(&self) -> &Buffer {
+        &self.cur().buffer
+    }
+
+    /// Sets cells of the map or the buffer (`None` empties a buffer cell; a
+    /// map cell cannot be emptied). Returns how many changed.
+    pub fn set_cells(
+        &mut self,
+        cells: impl IntoIterator<Item = ((i32, i32), Option<u16>)>,
+    ) -> usize {
+        let width = self.room().width;
+        let mut tiles = Vec::new();
+        let mut buffer = Vec::new();
+        let mut seen = HashSet::new();
+        for ((x, y), new) in cells {
+            if !seen.insert((x, y)) {
+                continue;
+            }
+            match self.cell(x, y) {
+                Cell::Room(old) => {
+                    if let Some(new) = new.filter(|&n| n != old) {
+                        tiles.push(TileChange {
+                            index: y as usize * width + x as usize,
+                            old,
+                            new,
+                        });
+                    }
+                }
+                Cell::Buffer(old) if old != new => buffer.push(BufferChange {
+                    cell: (x, y),
+                    old,
+                    new,
+                }),
+                _ => {}
+            }
+        }
+        let n = tiles.len() + buffer.len();
+        // Map and buffer cells changed together are one undo step.
+        let own_group = self.group.is_none();
+        if own_group {
+            self.begin_group();
+        }
+        if !tiles.is_empty() {
+            self.perform(Change::Tiles(tiles));
+        }
+        if !buffer.is_empty() {
+            self.perform(Change::Buffer(buffer));
+        }
+        if own_group {
+            self.end_group();
+        }
+        n
+    }
+
+    /// Sets one cell of the map or the buffer to `id`. Returns whether it
+    /// changed.
+    pub fn set_tile(&mut self, x: i32, y: i32, id: u16) -> bool {
+        self.set_cells([((x, y), Some(id))]) > 0
     }
 
     /// Paints the current tile at a cell.
@@ -560,9 +687,14 @@ impl Editor {
         self.set_tile(x, y, self.tile)
     }
 
+    /// Empties a buffer cell. Map cells are left alone.
+    pub fn erase(&mut self, x: i32, y: i32) -> bool {
+        self.set_cells([((x, y), None)]) > 0
+    }
+
     /// Picks the tile under a cell as the current one.
     pub fn pick_tile(&mut self, x: i32, y: i32) -> bool {
-        match self.tile_at(x, y) {
+        match self.cell(x, y).tile() {
             Some(id) => {
                 self.tile = id;
                 true
@@ -572,72 +704,77 @@ impl Editor {
     }
 
     /// Fills the cells between two corners (inclusive, any order) with the
-    /// current tile. Returns how many cells changed.
+    /// current tile, on the map and in the buffer. Returns how many cells
+    /// changed.
     pub fn fill_rect(&mut self, a: (i32, i32), b: (i32, i32)) -> usize {
-        let (x0, x1) = (a.0.min(b.0).max(0), a.0.max(b.0));
-        let (y0, y1) = (a.1.min(b.1).max(0), a.1.max(b.1));
-        let (width, height) = (self.room().width as i32, self.room().height as i32);
-        let mut cells = Vec::new();
-        for y in y0..=y1.min(height - 1) {
-            for x in x0..=x1.min(width - 1) {
-                let index = (y * width + x) as usize;
-                let old = self.room().tiles[index];
-                if old != self.tile {
-                    cells.push(TileChange {
-                        index,
-                        old,
-                        new: self.tile,
-                    });
-                }
-            }
-        }
-        let n = cells.len();
-        if n > 0 {
-            self.perform(Change::Tiles(cells));
-        }
-        n
+        let (l, t, r, bottom) = self.canvas_cells();
+        let (x0, x1) = (a.0.min(b.0).max(l), a.0.max(b.0).min(r - 1));
+        let (y0, y1) = (a.1.min(b.1).max(t), a.1.max(b.1).min(bottom - 1));
+        let tile = Some(self.tile);
+        let cells: Vec<_> = (y0..=y1)
+            .flat_map(|y| (x0..=x1).map(move |x| ((x, y), tile)))
+            .collect();
+        self.set_cells(cells)
     }
 
-    /// Replaces the 4-connected region of equal tiles around a cell with the
-    /// current tile. Returns how many cells changed.
+    /// Replaces the 4-connected region of equal cells around a cell with the
+    /// current tile. A region of the map stays on the map, one of the buffer
+    /// in the buffer. Returns how many cells changed.
     pub fn flood_fill(&mut self, x: i32, y: i32) -> usize {
-        let Some(target) = self.tile_at(x, y) else {
-            return 0;
-        };
-        if target == self.tile {
+        let target = self.cell(x, y);
+        if target == Cell::Outside || target.tile() == Some(self.tile) {
             return 0;
         }
-        let (width, height) = (self.room().width, self.room().height);
-        let mut seen = vec![false; width * height];
-        let mut cells = Vec::new();
-        let mut stack = vec![(x as usize, y as usize)];
+        let mut seen = HashSet::new();
+        let mut region = Vec::new();
+        let mut stack = vec![(x, y)];
         while let Some((cx, cy)) = stack.pop() {
-            let index = cy * width + cx;
-            if seen[index] || self.room().tiles[index] != target {
+            if !seen.insert((cx, cy)) || self.cell(cx, cy) != target {
                 continue;
             }
-            seen[index] = true;
-            cells.push(TileChange {
-                index,
-                old: target,
-                new: self.tile,
-            });
-            if cx > 0 {
-                stack.push((cx - 1, cy));
-            }
-            if cx + 1 < width {
-                stack.push((cx + 1, cy));
-            }
-            if cy > 0 {
-                stack.push((cx, cy - 1));
-            }
-            if cy + 1 < height {
-                stack.push((cx, cy + 1));
-            }
+            region.push(((cx, cy), Some(self.tile)));
+            stack.extend([(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)]);
         }
-        let n = cells.len();
-        self.perform(Change::Tiles(cells));
-        n
+        self.set_cells(region)
+    }
+
+    /// Copies the cells between two corners (inclusive, any order), from the
+    /// map and the buffer, as the stamp. Returns its size, or `None` (keeping
+    /// the old stamp) when every cell is empty.
+    pub fn copy_stamp(&mut self, a: (i32, i32), b: (i32, i32)) -> Option<(i32, i32)> {
+        let (x0, y0) = (a.0.min(b.0), a.1.min(b.1));
+        let (width, height) = ((a.0 - b.0).abs() + 1, (a.1 - b.1).abs() + 1);
+        let cells: Vec<Option<u16>> = (0..height)
+            .flat_map(|dy| (0..width).map(move |dx| (x0 + dx, y0 + dy)))
+            .map(|(x, y)| self.cell(x, y).tile())
+            .collect();
+        if cells.iter().all(Option::is_none) {
+            return None;
+        }
+        self.stamp = Some(Stamp {
+            width,
+            height,
+            cells,
+        });
+        Some((width, height))
+    }
+
+    /// Pastes the stamp with its top-left corner at a cell, on the map and
+    /// in the buffer. Empty stamp cells leave what is there. Returns how
+    /// many cells changed.
+    pub fn paste_stamp(&mut self, at: (i32, i32)) -> usize {
+        let Some(stamp) = &self.stamp else {
+            return 0;
+        };
+        let cells: Vec<_> = (0..stamp.height)
+            .flat_map(|dy| (0..stamp.width).map(move |dx| (dx, dy)))
+            .filter_map(|(dx, dy)| {
+                stamp
+                    .get(dx, dy)
+                    .map(|id| ((at.0 + dx, at.1 + dy), Some(id)))
+            })
+            .collect();
+        self.set_cells(cells)
     }
 
     // ---- objects ----
@@ -1076,6 +1213,83 @@ mod tests {
         assert!(!e.can_undo());
         assert!(e.redo());
         assert!((0..5).all(|x| e.room().tile(x, 0) == 0x0C));
+    }
+
+    #[test]
+    fn the_buffer_is_undoable_but_never_modifies_the_room() {
+        let Some(mut e) = editor() else { return };
+        let (w, h) = (e.room().width as i32, e.room().height as i32);
+        let before = e.room().tiles.clone();
+        assert_eq!(e.cell(-1, 0), Cell::Buffer(None));
+        assert_eq!(e.cell(w + BUFFER_MARGIN, 0), Cell::Outside);
+        assert_eq!(e.cell(0, h + BUFFER_MARGIN - 1), Cell::Buffer(None));
+        // Painting, filling and erasing below the room touch only the buffer.
+        e.tile = 0x0C;
+        assert!(e.paint(2, h + 1));
+        assert!(!e.paint(2, h + BUFFER_MARGIN), "beyond the buffer");
+        assert_eq!(e.fill_rect((0, h + 3), (1, h + 4)), 4);
+        assert!(e.erase(0, h + 3));
+        assert!(!e.erase(0, 0), "map cells cannot be emptied");
+        assert_eq!(e.buffer().len(), 4);
+        assert_eq!(e.room().tiles, before);
+        assert!(!e.is_dirty(e.current_index()), "the buffer is not saved");
+        e.undo();
+        assert_eq!(e.cell(0, h + 3), Cell::Buffer(Some(0x0C)));
+        e.undo();
+        e.undo();
+        assert!(e.buffer().is_empty());
+        e.redo();
+        assert_eq!(e.cell(2, h + 1), Cell::Buffer(Some(0x0C)));
+        assert!(!e.is_dirty(e.current_index()));
+        // A rectangle across the edge fills both, as separate cells.
+        e.tile = 0x0D;
+        assert_eq!(e.fill_rect((-1, 0), (0, 0)), 2);
+        assert!(e.is_dirty(e.current_index()));
+        e.undo();
+        assert_eq!(e.room().tiles, before);
+        // A flood fill in the buffer stays in the buffer.
+        let n = e.flood_fill(-3, -3);
+        assert!(n > 100, "the empty buffer is one region");
+        assert_eq!(e.room().tiles, before);
+        assert_eq!(
+            e.cell(-BUFFER_MARGIN, -BUFFER_MARGIN),
+            Cell::Buffer(Some(0x0D))
+        );
+        e.undo();
+        assert_eq!(e.buffer().len(), 1);
+    }
+
+    #[test]
+    fn a_stamp_copies_from_the_buffer_and_pastes_on_the_map() {
+        let Some(mut e) = editor() else { return };
+        let h = e.room().height as i32;
+        // Compose an L in the buffer: two cells, a hole at (1, h + 2).
+        e.tile = 0x0C;
+        e.paint(0, h + 1);
+        e.tile = 0x0D;
+        e.paint(0, h + 2);
+        e.paint(1, h + 1);
+        assert_eq!(e.copy_stamp((3, h + 5), (5, h + 6)), None, "empty cells");
+        assert_eq!(e.copy_stamp((1, h + 2), (0, h + 1)), Some((2, 2)));
+        let hole = e.room().tile(11, 3);
+        e.begin_group();
+        assert!(e.paste_stamp((10, 2)) > 0);
+        e.end_group();
+        assert_eq!(e.room().tile(10, 2), 0x0C);
+        assert_eq!(e.room().tile(10, 3), 0x0D);
+        assert_eq!(e.room().tile(11, 2), 0x0D);
+        assert_eq!(e.room().tile(11, 3), hole, "empty stamp cells keep the map");
+        assert!(e.is_dirty(e.current_index()));
+        e.undo();
+        assert_eq!(
+            e.room().tile(10, 2),
+            e.loaded(e.current_index()).unwrap().room.tile(10, 2)
+        );
+        // Map cells copy too, and a paste into the buffer stays there.
+        let tile = e.room().tile(20, 1);
+        e.copy_stamp((20, 1), (20, 1));
+        e.paste_stamp((-2, -2));
+        assert_eq!(e.cell(-2, -2), Cell::Buffer(Some(tile)));
     }
 
     #[test]

@@ -46,6 +46,7 @@ pub fn map_key(key: Key, mods: Modifiers) -> Option<MapKey> {
         Key::B => MapKey::Tool(Tool::Paint),
         Key::R => MapKey::Tool(Tool::Rect),
         Key::G => MapKey::Tool(Tool::Fill),
+        Key::S => MapKey::Tool(Tool::Stamp),
         Key::O => MapKey::Tool(Tool::AddObject),
         Key::DIGIT1 => MapKey::Zoom(1),
         Key::DIGIT2 => MapKey::Zoom(2),

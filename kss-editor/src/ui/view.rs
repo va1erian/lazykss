@@ -3,10 +3,16 @@
 
 use kss_core::{CELL, Layers};
 
+use crate::editor::BUFFER_MARGIN;
+
 use super::scroll::Scroller;
 
 pub const MIN_ZOOM: i32 = 1;
 pub const MAX_ZOOM: i32 = 4;
+
+/// The width of the buffer around the room, in room pixels: the scrolled
+/// content starts this far above and left of the room's origin.
+pub const MARGIN: i32 = BUFFER_MARGIN * CELL as i32;
 
 #[derive(Debug, Clone)]
 pub struct ViewState {
@@ -52,16 +58,32 @@ impl ViewState {
 
     fn sync_content(&mut self) {
         let cell = CELL as i32 * self.zoom;
-        self.scroller.content = (self.room_cells.0 * cell, self.room_cells.1 * cell);
+        let margin = 2 * BUFFER_MARGIN * cell;
+        self.scroller.content = (
+            self.room_cells.0 * cell + margin,
+            self.room_cells.1 * cell + margin,
+        );
         self.scroller.clamp();
+    }
+
+    /// Scrolls to the room's top-left corner, the buffer just out of view
+    /// above and to the left.
+    pub fn home(&mut self) {
+        self.scroller.offset = (MARGIN * self.zoom, MARGIN * self.zoom);
+        self.scroller.clamp();
+    }
+
+    /// Whether the room itself (without the buffer) fits the view's height.
+    pub fn room_fits_vertically(&self) -> bool {
+        self.room_cells.1 * CELL as i32 * self.zoom <= self.scroller.view().height()
     }
 
     /// The room pixel under a point of the node (may lie outside the room).
     pub fn to_room(&self, x: i32, y: i32) -> (i32, i32) {
         let (ox, oy) = self.scroller.offset;
         (
-            (x + ox).div_euclid(self.zoom),
-            (y + oy).div_euclid(self.zoom),
+            (x + ox).div_euclid(self.zoom) - MARGIN,
+            (y + oy).div_euclid(self.zoom) - MARGIN,
         )
     }
 
@@ -73,8 +95,8 @@ impl ViewState {
     /// The node point a room pixel is drawn at.
     pub fn to_screen(&self, pos: (i32, i32)) -> (i32, i32) {
         (
-            pos.0 * self.zoom - self.scroller.offset.0,
-            pos.1 * self.zoom - self.scroller.offset.1,
+            (pos.0 + MARGIN) * self.zoom - self.scroller.offset.0,
+            (pos.1 + MARGIN) * self.zoom - self.scroller.offset.1,
         )
     }
 
@@ -88,7 +110,10 @@ impl ViewState {
         let (rx, ry) = self.to_room(anchor.0, anchor.1);
         self.zoom = zoom;
         self.sync_content();
-        self.scroller.offset = (rx * zoom - anchor.0, ry * zoom - anchor.1);
+        self.scroller.offset = (
+            (rx + MARGIN) * zoom - anchor.0,
+            (ry + MARGIN) * zoom - anchor.1,
+        );
         self.scroller.clamp();
         true
     }
@@ -103,8 +128,8 @@ impl ViewState {
     pub fn center_on(&mut self, pos: (i32, i32)) {
         let view = self.scroller.view();
         self.scroller.offset = (
-            pos.0 * self.zoom - view.width() / 2,
-            pos.1 * self.zoom - view.height() / 2,
+            (pos.0 + MARGIN) * self.zoom - view.width() / 2,
+            (pos.1 + MARGIN) * self.zoom - view.height() / 2,
         );
         self.scroller.clamp();
     }
@@ -124,7 +149,8 @@ mod tests {
     #[test]
     fn coordinates_round_trip() {
         let mut v = view();
-        v.scroller.offset = (480, 0);
+        v.home();
+        v.scroller.offset.0 += 480;
         let pos = v.to_room(10, 20);
         assert_eq!(pos, ((10 + 480) / 2, 10));
         assert_eq!(v.to_screen(pos), (10, 20));
@@ -143,6 +169,10 @@ mod tests {
         assert!(!v.set_zoom(9, (0, 0)), "zoom is capped at 4x");
         assert_eq!(v.zoom, MAX_ZOOM);
         v.set_zoom(1, (0, 0));
-        assert_eq!(v.scroller.content, (2400, 192));
+        assert_eq!(v.scroller.content, (2400 + 2 * MARGIN, 192 + 2 * MARGIN));
+        v.home();
+        assert_eq!(v.to_room(0, 0).0, 0, "home starts at the room's left edge");
+        // Only 360 px of the 384 px margin scroll above a 600 px view.
+        assert_eq!(v.to_room(0, 0).1, -12);
     }
 }

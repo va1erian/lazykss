@@ -7,7 +7,7 @@ use xui::prelude::*;
 
 use super::app::EditorApp;
 use super::tree::{self, Node};
-use crate::editor::Tool;
+use crate::editor::{Cell, Tool};
 
 impl EditorApp {
     /// A different room (or a different ROM) is now current.
@@ -17,7 +17,7 @@ impl EditorApp {
         if let Some((w, h)) = self.ed(|e| (e.room().width, e.room().height)) {
             self.h.map.get().update_view(|v| {
                 v.set_room(w, h);
-                v.scroller.offset = (0, 0);
+                v.home();
                 v.hover = None;
                 v.rect_drag = None;
             });
@@ -366,9 +366,7 @@ impl EditorApp {
                 .find(|l| l.rooms.contains(&e.current_index()))
                 .map(|l| l.name.clone())
                 .unwrap_or_default();
-            let hovered = self
-                .cursor
-                .and_then(|(cell, _)| e.tile_at(cell.0, cell.1).map(|t| (cell, t)));
+            let hovered = self.cursor.map(|(cell, _)| (cell, e.cell(cell.0, cell.1)));
             (
                 e.current_index(),
                 level,
@@ -397,13 +395,17 @@ impl EditorApp {
             ),
         );
         let cursor = match (self.cursor, hovered) {
-            (Some((_, pos)), Some((cell, t))) => {
+            (Some((_, pos)), Some((cell, Cell::Room(t)))) => {
                 format!(
                     "cell ({}, {})  px ({}, {})  tile 0x{t:03X}",
                     cell.0, cell.1, pos.0, pos.1
                 )
             }
-            (Some((_, pos)), None) => format!("outside room  px ({}, {})", pos.0, pos.1),
+            (Some(_), Some((cell, Cell::Buffer(t)))) => {
+                let tile = t.map_or("empty".to_string(), |t| format!("tile 0x{t:03X}"));
+                format!("buffer ({}, {})  {tile}  (not saved)", cell.0, cell.1)
+            }
+            (Some((_, pos)), _) => format!("outside room  px ({}, {})", pos.0, pos.1),
             _ => String::from("cell -"),
         };
         info.set_text(1, &cursor);
