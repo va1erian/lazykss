@@ -2507,7 +2507,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 [[package]]
 name = "xui"
 version = "0.1.0"
-source = "git+https://github.com/va1erian/xui#2da4951bd24ca8269dd7b851e9c6664d27986b05"
+source = "git+https://github.com/va1erian/xui#d51d957eb9ee937763a8d502fecf6592049be10f"
 dependencies = [
  "xui-canvas",
  "xui-core",
@@ -2517,7 +2517,7 @@ dependencies = [
 [[package]]
 name = "xui-canvas"
 version = "0.1.0"
-source = "git+https://github.com/va1erian/xui#2da4951bd24ca8269dd7b851e9c6664d27986b05"
+source = "git+https://github.com/va1erian/xui#d51d957eb9ee937763a8d502fecf6592049be10f"
 dependencies = [
  "arboard",
  "cosmic-text",
@@ -2534,7 +2534,7 @@ dependencies = [
 [[package]]
 name = "xui-core"
 version = "0.1.0"
-source = "git+https://github.com/va1erian/xui#2da4951bd24ca8269dd7b851e9c6664d27986b05"
+source = "git+https://github.com/va1erian/xui#d51d957eb9ee937763a8d502fecf6592049be10f"
 dependencies = [
  "png",
  "raw-window-handle",
@@ -2544,7 +2544,7 @@ dependencies = [
 [[package]]
 name = "xui-d2d"
 version = "0.1.0"
-source = "git+https://github.com/va1erian/xui#2da4951bd24ca8269dd7b851e9c6664d27986b05"
+source = "git+https://github.com/va1erian/xui#d51d957eb9ee937763a8d502fecf6592049be10f"
 dependencies = [
  "raw-window-handle",
  "windows",
@@ -2555,7 +2555,7 @@ dependencies = [
 [[package]]
 name = "xui-gpu"
 version = "0.1.0"
-source = "git+https://github.com/va1erian/xui#2da4951bd24ca8269dd7b851e9c6664d27986b05"
+source = "git+https://github.com/va1erian/xui#d51d957eb9ee937763a8d502fecf6592049be10f"
 dependencies = [
  "glow",
  "xui-core",
@@ -2564,7 +2564,7 @@ dependencies = [
 [[package]]
 name = "xui-markdown"
 version = "0.1.0"
-source = "git+https://github.com/va1erian/xui#2da4951bd24ca8269dd7b851e9c6664d27986b05"
+source = "git+https://github.com/va1erian/xui#d51d957eb9ee937763a8d502fecf6592049be10f"
 dependencies = [
  "pulldown-cmark",
  "unicode-linebreak",
