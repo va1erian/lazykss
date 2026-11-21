@@ -5,4 +5,5 @@
 
 pub mod editor;
 pub mod history;
+pub mod settings;
 pub mod ui;

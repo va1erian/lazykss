@@ -7,6 +7,7 @@ mod map_paint;
 mod picker;
 mod render;
 mod scroll;
+mod settings_window;
 mod sync;
 mod tree;
 mod view;
@@ -39,7 +40,11 @@ pub fn run(rom: Option<PathBuf>) -> Result<()> {
     } else {
         app.backend(Rc::new(xui_d2d::D2dBackend::new()))
     };
-    app.run(move |ui| build_app(ui, rom, new_shared()))
+    app.run(move |ui| {
+        // The saved theme and animation choice, before anything is built.
+        settings_window::apply(ui, &crate::settings::Settings::load());
+        build_app(ui, rom, new_shared())
+    })
 }
 
 /// The window's initial size in design units.

@@ -24,6 +24,7 @@ const UNDO: MenuId = MenuId::new(10);
 const REDO: MenuId = MenuId::new(11);
 const ZOOM_IN: MenuId = MenuId::new(20);
 const ZOOM_OUT: MenuId = MenuId::new(21);
+const SETTINGS: MenuId = MenuId::new(22);
 const GUIDE: MenuId = MenuId::new(30);
 
 /// The user guide the Help tab shows.
@@ -42,6 +43,7 @@ fn menu_message(id: MenuId) -> Option<Msg> {
         REDO => Msg::Redo,
         ZOOM_IN => Msg::ZoomIn,
         ZOOM_OUT => Msg::ZoomOut,
+        SETTINGS => Msg::ShowSettings,
         GUIDE => Msg::ShowGuide,
         _ => return None,
     })
@@ -63,6 +65,8 @@ fn menu() -> Build<Menu<Msg>, Msg> {
         m.submenu(MenuId::new(102), "&View", |v| {
             v.item(ZOOM_IN, "Zoom &in");
             v.item(ZOOM_OUT, "Zoom &out");
+            v.separator();
+            v.item(SETTINGS, "&Settings...");
         });
         m.submenu(MenuId::new(103), "&Help", |h| {
             h.item(GUIDE, "&User guide    F1");

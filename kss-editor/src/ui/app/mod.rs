@@ -58,6 +58,8 @@ pub enum Msg {
     ZoomOut,
     /// Shows the user guide (the Help tab).
     ShowGuide,
+    /// Opens the settings window.
+    ShowSettings,
     // browser, map, picker
     BrowserSelect(usize),
     BrowserToggle(usize, bool),
@@ -280,6 +282,7 @@ impl App for EditorApp {
             Msg::ZoomIn => self.zoom_by(1),
             Msg::ZoomOut => self.zoom_by(-1),
             Msg::ShowGuide => self.show_guide(),
+            Msg::ShowSettings => self.show_settings(ui),
             Msg::BrowserSelect(id) => self.browser_select(id),
             Msg::BrowserToggle(id, open) => self.browser_toggle(id, open),
             Msg::Map(event) => self.map_event(event),

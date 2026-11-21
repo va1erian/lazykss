@@ -6,6 +6,7 @@ use xui::prelude::*;
 
 use super::{EditorApp, Gesture, Msg};
 use crate::editor::{Editor, default_edited_path};
+use crate::settings::Settings;
 
 impl EditorApp {
     pub(super) fn open_rom(&mut self, path: PathBuf) {
@@ -88,6 +89,19 @@ impl EditorApp {
     pub(super) fn quit(&mut self, ui: &mut Ui<Msg>) {
         if !self.unsaved_edits_block("Quit") {
             ui.quit();
+        }
+    }
+
+    /// Opens the settings window; on OK applies and saves what it chose.
+    pub(super) fn show_settings(&mut self, ui: &mut Ui<Msg>) {
+        let current = Settings::load();
+        let Some(chosen) = super::super::settings_window::show(ui, current) else {
+            return;
+        };
+        super::super::settings_window::apply(ui, &chosen);
+        match chosen.save() {
+            Ok(()) => self.say("Settings saved"),
+            Err(e) => self.say(&format!("Settings applied, but not saved: {e}")),
         }
     }
 
