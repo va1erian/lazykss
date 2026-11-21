@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use kss_core::room::MAX_CELLS;
-use kss_core::room::SPRING_BREEZE_LEVELS;
-use kss_core::{CELL, Door, Object, ObjectSprites, Rom, Room, SaveReport, Tables, Tileset};
+use kss_core::names::{DOOR_STAR, TREASURE_CHEST, WARP_STAR};
+use kss_core::room::{Destination, GREAT_CAVE_OFFENSIVE, MAX_CELLS, MAX_DOORS, NAMED_LEVELS};
+use kss_core::{CELL, Door, Level, Object, ObjectSprites, Rom, Room, SaveReport, Tables, Tileset};
 
 use crate::history::{Change, Entry, MapSnapshot, TileChange};
 
@@ -65,6 +65,18 @@ pub struct LoadedRoom {
     pub undo: Vec<Entry>,
     pub redo: Vec<Entry>,
     pub dirty: bool,
+}
+
+/// A treasure chest placed in a room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChestSpot {
+    /// The treasure number (the chest's variant).
+    pub treasure: u8,
+    pub room: usize,
+    /// Index in the room's object list.
+    pub object: usize,
+    pub x: u16,
+    pub y: u16,
 }
 
 /// What a save wrote.
@@ -207,8 +219,9 @@ impl Editor {
             selected_door: None,
             group: None,
         };
-        // The Spring Breeze rooms are listed with their sizes: load them now.
-        for index in editor.spring_breeze_rooms() {
+        // The named levels are listed with their sizes, and the treasure
+        // list covers every room of the cave: load them now.
+        for index in editor.named_rooms() {
             let _ = editor.load_room(index);
         }
         editor
@@ -224,10 +237,68 @@ impl Editor {
         self.tables.room_count()
     }
 
-    pub fn spring_breeze_rooms(&self) -> std::ops::Range<usize> {
-        let start = self.tables.levels[SPRING_BREEZE_LEVELS.start].rooms.start;
-        let end = self.tables.levels[SPRING_BREEZE_LEVELS.end - 1].rooms.end;
-        start..end.min(self.tables.room_count())
+    /// The levels listed by name, in order.
+    pub fn named_levels(&self) -> impl Iterator<Item = &Level> + '_ {
+        NAMED_LEVELS
+            .iter()
+            .filter_map(|&i| self.tables.levels.get(i))
+    }
+
+    /// Every room of the named levels, in level order.
+    pub fn named_rooms(&self) -> Vec<usize> {
+        let count = self.tables.room_count();
+        self.named_levels()
+            .flat_map(|l| l.rooms.start.min(count)..l.rooms.end.min(count))
+            .collect()
+    }
+
+    /// The rooms of The Great Cave Offensive.
+    pub fn cave_rooms(&self) -> std::ops::Range<usize> {
+        let count = self.tables.room_count();
+        self.tables
+            .levels
+            .get(GREAT_CAVE_OFFENSIVE)
+            .map_or(0..0, |l| l.rooms.start.min(count)..l.rooms.end.min(count))
+    }
+
+    /// The level of the current room.
+    pub fn level(&self) -> Option<&Level> {
+        self.tables.level_of(self.current)
+    }
+
+    /// Where a door of the current room leads.
+    pub fn destination(&self, door: &Door) -> Option<Destination> {
+        self.level().map(|l| door.destination(l))
+    }
+
+    /// Where a door of the current room leads, in words.
+    pub fn destination_label(&self, door: &Door) -> String {
+        match self.destination(door) {
+            Some(Destination::Room(r)) if r < self.room_count() => format!("room {r}"),
+            Some(Destination::Room(r)) => format!("room {r} (missing)"),
+            Some(Destination::LevelExit) => "stage exit".to_string(),
+            Some(Destination::Special(v)) => format!("special {v:04X}"),
+            None => format!("#{}", door.dest_room),
+        }
+    }
+
+    /// An object's name as the lists and the map show it: a chest names its
+    /// treasure, a warp star where it goes.
+    pub fn object_label(&self, o: &Object) -> String {
+        match o.id {
+            TREASURE_CHEST => match kss_core::treasure::treasure(o.variant) {
+                Some(t) => format!("Treasure {}: {}", o.variant, t.name),
+                None => format!("Treasure chest {} (no such treasure)", o.variant),
+            },
+            WARP_STAR => match o
+                .warp_door()
+                .and_then(|i| self.room().doors().get(i).copied())
+            {
+                Some(door) => format!("Warp Star \u{2192} {}", self.destination_label(&door)),
+                None => "Warp Star (no door record)".to_string(),
+            },
+            id => kss_core::names::object_name(id).unwrap_or("").to_string(),
+        }
     }
 
     /// The file the ROM was loaded from. Never written unless the user picks
@@ -404,11 +475,15 @@ impl Editor {
             }
         }
         let reordered = entry.iter().any(Change::reorders_objects);
+        let doors = entry.iter().any(Change::reorders_doors);
         lr.redo.push(entry);
         lr.dirty = true;
         if reordered {
             // The selected index may now name another object.
             self.selected_object = None;
+        }
+        if doors {
+            self.selected_door = None;
         }
         self.fix_selection();
         true
@@ -427,10 +502,14 @@ impl Editor {
             }
         }
         let reordered = entry.iter().any(Change::reorders_objects);
+        let doors = entry.iter().any(Change::reorders_doors);
         lr.undo.push(entry);
         lr.dirty = true;
         if reordered {
             self.selected_object = None;
+        }
+        if doors {
+            self.selected_door = None;
         }
         self.fix_selection();
         true
@@ -585,12 +664,15 @@ impl Editor {
         best.map(|(i, _)| i)
     }
 
-    /// The door whose trigger box (one cell, centred on its position)
-    /// contains a room-pixel position. Doors without a trigger have no box.
+    /// The door whose trigger box (the cell whose top-left corner is its
+    /// position) contains a room-pixel position. Doors without a trigger have no box.
     pub fn door_at(&self, x: i32, y: i32) -> Option<usize> {
-        let half = CELL as i32 / 2;
+        // The position is the top-left corner of the door's cell: the
+        // game's door stars sit 12 pixels right of and below it.
+        let cell = CELL as i32;
         self.room().doors().iter().position(|d| {
-            d.has_trigger() && (d.x as i32 - x).abs() <= half && (d.y as i32 - y).abs() <= half
+            let (dx, dy) = (x - d.x as i32, y - d.y as i32);
+            d.has_trigger() && (0..cell).contains(&dx) && (0..cell).contains(&dy)
         })
     }
 
@@ -655,11 +737,170 @@ impl Editor {
         let Some(old) = doors.get(index).copied() else {
             return false;
         };
-        if old == new {
+        // FFFF ends the list: it cannot be a destination.
+        if old == new || new.dest_room == 0xFFFF {
             return false;
         }
         self.perform(Change::Door { index, old, new });
         true
+    }
+
+    /// Adds a door whose trigger is the cell under a room-pixel position,
+    /// with the invisible door star the game's own doors have at the cell's
+    /// centre. It leads back into this room at the same place until edited.
+    /// Selects it and returns its index.
+    pub fn add_door(&mut self, x: i32, y: i32) -> Option<usize> {
+        let (px, py) = self.clamp_position(x, y);
+        let cell = CELL as u16;
+        let (cx, cy) = (px - px % cell, py - py % cell);
+        let here = self
+            .level()
+            .and_then(|l| Door::relative_to(l, self.current))?;
+        let door = Door {
+            dest_room: here,
+            x: cx,
+            y: cy,
+            dest_x: cx + cell / 2,
+            dest_y: cy + cell / 2,
+        };
+        let star = Object {
+            variant: 0,
+            id: DOOR_STAR,
+            x: cx + cell / 2,
+            y: cy + cell / 2,
+        };
+        self.insert_door_with(door, star)
+    }
+
+    /// Adds a warp star at a room-pixel position together with the door
+    /// record it uses (one without a trigger area). Selects the door.
+    pub fn add_warp(&mut self, x: i32, y: i32) -> Option<usize> {
+        let (px, py) = self.clamp_position(x, y);
+        let here = self
+            .level()
+            .and_then(|l| Door::relative_to(l, self.current))?;
+        let door = Door {
+            dest_room: here,
+            x: Door::NO_TRIGGER,
+            y: Door::NO_TRIGGER,
+            dest_x: px,
+            dest_y: py,
+        };
+        let star = Object {
+            variant: self.room().doors().len().min(255) as u8,
+            id: WARP_STAR,
+            x: px,
+            y: py,
+        };
+        self.insert_door_with(door, star)
+    }
+
+    fn insert_door_with(&mut self, door: Door, marker: Object) -> Option<usize> {
+        let index = self.room().doors().len();
+        if index >= MAX_DOORS {
+            return None;
+        }
+        let outer = self.group.is_some();
+        self.begin_group();
+        self.perform(Change::InsertDoor { index, door });
+        let at = self.room().objects.len();
+        self.perform(Change::AddObject {
+            index: at,
+            object: marker,
+        });
+        if !outer {
+            self.end_group();
+        }
+        self.selected_door = Some(index);
+        self.selected_object = None;
+        Some(index)
+    }
+
+    /// Removes door `index`, the door star on its trigger and the warp stars
+    /// that use it, and renumbers the warp stars of later doors: one undo
+    /// step.
+    pub fn remove_door(&mut self, index: usize) -> bool {
+        let Some(door) = self.room().doors().get(index).copied() else {
+            return false;
+        };
+        let outer = self.group.is_some();
+        self.begin_group();
+        self.perform(Change::RemoveDoor { index, door });
+        let half = CELL as u16 / 2;
+        let star_at = (door.x.wrapping_add(half), door.y.wrapping_add(half));
+        // When a remaining door has its trigger on the same cell, one star
+        // stays for it.
+        let shared = self
+            .room()
+            .doors()
+            .iter()
+            .any(|d| (d.x, d.y) == (door.x, door.y));
+        let objects = &self.room().objects;
+        let stars = (0..objects.len())
+            .filter(|&i| {
+                let o = objects[i];
+                door.has_trigger() && o.id == DOOR_STAR && (o.x, o.y) == star_at
+            })
+            .skip(usize::from(shared));
+        let mut doomed: Vec<usize> = (0..objects.len())
+            .filter(|&i| objects[i].warp_door() == Some(index))
+            .chain(stars)
+            .collect();
+        doomed.sort_unstable();
+        for &i in doomed.iter().rev() {
+            let object = self.room().objects[i];
+            self.perform(Change::RemoveObject { index: i, object });
+        }
+        for i in 0..self.room().objects.len() {
+            let old = self.room().objects[i];
+            if old.warp_door().is_some_and(|d| d > index) {
+                let new = Object {
+                    variant: old.variant - 1,
+                    ..old
+                };
+                self.perform(Change::Object { index: i, old, new });
+            }
+        }
+        if !outer {
+            self.end_group();
+        }
+        self.selected_door = None;
+        self.selected_object = None;
+        true
+    }
+
+    /// The warp stars of the current room that use door `index`.
+    pub fn warps_of(&self, index: usize) -> Vec<usize> {
+        let objects = &self.room().objects;
+        (0..objects.len())
+            .filter(|&i| objects[i].warp_door() == Some(index))
+            .collect()
+    }
+
+    // ---- treasures ----
+
+    /// Every treasure chest in the cave's rooms, edits included, by
+    /// treasure number then room.
+    pub fn chests(&self) -> Vec<ChestSpot> {
+        let mut spots = Vec::new();
+        for room in self.cave_rooms() {
+            let Some(lr) = self.rooms.get(&room) else {
+                continue;
+            };
+            for (object, o) in lr.room.objects.iter().enumerate() {
+                if o.id == TREASURE_CHEST {
+                    spots.push(ChestSpot {
+                        treasure: o.variant,
+                        room,
+                        object,
+                        x: o.x,
+                        y: o.y,
+                    });
+                }
+            }
+        }
+        spots.sort_by_key(|s| (s.treasure, s.room, s.object));
+        spots
     }
 
     pub fn set_music(&mut self, song: u8) -> bool {
@@ -810,8 +1051,11 @@ mod tests {
         let Some(e) = editor() else { return };
         assert_eq!(e.current_index(), 1);
         assert_eq!((e.room().width, e.room().height), (100, 8));
-        assert_eq!(e.spring_breeze_rooms(), 0..27);
-        assert!(e.loaded(26).is_some());
+        let named = e.named_rooms();
+        assert_eq!(named.len(), 27 + 81);
+        assert_eq!(e.cave_rooms(), 72..153);
+        assert!(e.loaded(26).is_some() && e.loaded(152).is_some());
+        assert!(e.loaded(27).is_none());
         assert!(!e.any_dirty());
     }
 
@@ -1070,6 +1314,144 @@ mod tests {
         e.save_as(&dir.join("b.sfc")).unwrap();
         assert_eq!(e.room().blocks(), blocks);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_cave_lists_its_treasure_chests() {
+        let Some(e) = editor() else { return };
+        let chests = e.chests();
+        // 58 chests: every treasure but 0 and 16, once each.
+        assert_eq!(chests.len(), 58);
+        let numbers: Vec<u8> = chests.iter().map(|c| c.treasure).collect();
+        let expected: Vec<u8> = (0..60).filter(|n| *n != 0 && *n != 16).collect();
+        assert_eq!(numbers, expected);
+        let coin = chests.iter().find(|c| c.treasure == 1).unwrap();
+        assert_eq!((coin.room, coin.x, coin.y), (80, 204, 124));
+        assert_eq!(
+            e.loaded(80).unwrap().room.objects[coin.object].id,
+            TREASURE_CHEST
+        );
+    }
+
+    #[test]
+    fn labels_resolve_doors_chests_and_warps() {
+        let Some(mut e) = editor() else { return };
+        e.select_room(7).unwrap();
+        let door = e.room().doors()[0];
+        assert_eq!(e.destination_label(&door), "room 8");
+        e.select_room(80).unwrap();
+        let chest = *e
+            .room()
+            .objects
+            .iter()
+            .find(|o| o.id == TREASURE_CHEST)
+            .unwrap();
+        assert_eq!(e.object_label(&chest), "Treasure 1: Gold Coin");
+        e.select_room(134).unwrap();
+        let warp = *e.room().objects.iter().find(|o| o.id == WARP_STAR).unwrap();
+        assert_eq!(e.object_label(&warp), "Warp Star \u{2192} room 148");
+    }
+
+    #[test]
+    fn doors_and_warps_add_and_remove_in_one_step() {
+        let Some(mut e) = editor() else { return };
+        // Room 1: door 0 (with its door star) and door 1, used by the warp star.
+        let (doors, objects) = (e.room().doors(), e.room().objects.clone());
+        let i = e.add_door(100, 130).unwrap();
+        assert_eq!(i, 2);
+        assert_eq!(e.selected_door, Some(2));
+        let door = e.room().doors()[2];
+        assert_eq!((door.x, door.y, door.dest_room), (96, 120, 1));
+        let star = *e.room().objects.last().unwrap();
+        assert_eq!((star.id, star.x, star.y), (DOOR_STAR, 108, 132));
+        assert!(e.undo());
+        assert_eq!(e.room().doors(), doors);
+        assert_eq!(e.room().objects, objects);
+        assert!(e.redo());
+        // A warp added after it uses door 3.
+        let w = e.add_warp(300, 60).unwrap();
+        assert_eq!(w, 3);
+        assert!(!e.room().doors()[3].has_trigger());
+        assert_eq!(e.warps_of(3).len(), 1);
+        // Deleting door 0 takes its door star and renumbers both warp stars.
+        assert!(e.remove_door(0));
+        assert_eq!(e.room().doors().len(), 3);
+        let warps = |e: &Editor| -> Vec<usize> {
+            e.room()
+                .objects
+                .iter()
+                .filter_map(|o| o.warp_door())
+                .collect()
+        };
+        assert_eq!(warps(&e), vec![0, 2]);
+        assert!(
+            !e.room()
+                .objects
+                .iter()
+                .any(|o| o.id == DOOR_STAR && (o.x, o.y) == (396, 132))
+        );
+        // Deleting the warp's door takes the warp star.
+        assert!(e.remove_door(2));
+        assert!(e.warps_of(2).is_empty());
+        assert_eq!(warps(&e), vec![0]);
+        // Each deletion is one undo step.
+        assert!(e.undo());
+        assert!(e.undo());
+        assert_eq!(warps(&e), vec![1, 3]);
+        assert!(e.undo());
+        assert!(e.undo());
+        assert_eq!(e.room().doors(), doors);
+        assert_eq!(e.room().objects, objects);
+        // FFFF would end the list.
+        let first = e.room().doors()[0];
+        assert!(!e.set_door(
+            0,
+            Door {
+                dest_room: 0xFFFF,
+                ..first
+            }
+        ));
+    }
+
+    #[test]
+    fn a_door_sharing_a_cell_keeps_one_star() {
+        let Some(mut e) = editor() else { return };
+        // Room 1's door 0 is on (384, 120); add a second door on that cell.
+        let stars = |e: &Editor| {
+            e.room()
+                .objects
+                .iter()
+                .filter(|o| o.id == DOOR_STAR && (o.x, o.y) == (396, 132))
+                .count()
+        };
+        let i = e.add_door(390, 125).unwrap();
+        assert_eq!(stars(&e), 2);
+        assert!(e.remove_door(i));
+        assert_eq!(stars(&e), 1, "door 0 keeps its star");
+        assert!(e.remove_door(0));
+        assert_eq!(stars(&e), 0);
+    }
+
+    #[test]
+    fn an_added_door_survives_a_save() {
+        let Some(mut e) = editor() else { return };
+        e.select_room(75).unwrap();
+        let blocks = e.room().blocks();
+        let i = e.add_door(500, 300).unwrap();
+        let door = Door {
+            dest_room: 8,
+            ..e.room().doors()[i]
+        };
+        assert!(e.set_door(i, door));
+        let out = temp("door-save").join("out.sfc");
+        e.save_as(&out).unwrap();
+        let mut back = Editor::open(&out).unwrap();
+        back.select_room(75).unwrap();
+        assert_eq!(back.room().doors()[i], door);
+        assert_eq!(back.destination_label(&door), "room 80");
+        assert_eq!(back.room().blocks(), blocks);
+        assert_eq!(back.chests().len(), 58);
+        let _ = std::fs::remove_dir_all(temp("door-save"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Painting the map: room image, grid, doors, objects and tool overlays.
 
-use kss_core::names::object_name;
+use kss_core::names::{TREASURE_CHEST, WARP_STAR};
 use kss_core::{CELL, Object};
 use xui::Color;
 use xui::Dip;
@@ -148,8 +148,9 @@ fn paint_doors(canvas: &mut dyn Canvas, editor: &Editor, view: &ViewState, theme
         if !door.has_trigger() {
             continue;
         }
-        let (cx, cy) = view.to_screen((door.x as i32, door.y as i32));
-        let rect = Rect::new(cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2);
+        // The position is the top-left corner of the door's cell.
+        let (left, top) = view.to_screen((door.x as i32, door.y as i32));
+        let rect = Rect::new(left, top, left + side, top + side);
         let selected = editor.selected_door == Some(i);
         let colour = Color::rgb(0xFF, 0xB0, 0x20);
         canvas.fill_rect_rgba(
@@ -167,7 +168,7 @@ fn paint_doors(canvas: &mut dyn Canvas, editor: &Editor, view: &ViewState, theme
         );
         label(
             canvas,
-            &format!("\u{2192} room {}", door.dest_room),
+            &format!("\u{2192} {}", editor.destination_label(door)),
             Point::new(rect.left, rect.top - 18),
             colour,
         );
@@ -246,11 +247,17 @@ fn paint_objects(
                 3.0,
             );
         }
-        // A sprite speaks for itself; a box, or the selection, gets its name.
+        // A sprite speaks for itself; a box, or the selection, gets its
+        // name. Chests and warp stars always say what they hold or reach.
         let has_sprite = editor.sprites().get(object.id, object.variant).is_some();
-        if selected || !has_sprite {
-            let name = object_name(object.id)
-                .map_or_else(|| format!("object {:02X}", object.id), str::to_string);
+        let telling = matches!(object.id, TREASURE_CHEST | WARP_STAR);
+        if selected || !has_sprite || telling {
+            let name = editor.object_label(object);
+            let name = if name.is_empty() {
+                format!("object {:02X}", object.id)
+            } else {
+                name
+            };
             label(
                 canvas,
                 &name,

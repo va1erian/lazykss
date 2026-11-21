@@ -71,6 +71,14 @@ pub enum Change {
         old: Door,
         new: Door,
     },
+    InsertDoor {
+        index: usize,
+        door: Door,
+    },
+    RemoveDoor {
+        index: usize,
+        door: Door,
+    },
     Music {
         old: u8,
         new: u8,
@@ -86,6 +94,11 @@ impl Change {
     /// of the ones after it.
     pub fn reorders_objects(&self) -> bool {
         matches!(self, Change::AddObject { .. } | Change::RemoveObject { .. })
+    }
+
+    /// Whether the change adds or removes a door.
+    pub fn reorders_doors(&self) -> bool {
+        matches!(self, Change::InsertDoor { .. } | Change::RemoveDoor { .. })
     }
 
     /// Whether the change alters what the room image shows.
@@ -116,6 +129,12 @@ impl Change {
             Change::Door { index, new, .. } => {
                 room.set_door(*index, *new);
             }
+            Change::InsertDoor { index, door } => {
+                room.insert_door(*index, *door);
+            }
+            Change::RemoveDoor { index, .. } => {
+                room.remove_door(*index);
+            }
             Change::Music { new, .. } => room.set_music(*new),
             Change::Resize { new, .. } => new.restore(room),
         }
@@ -144,6 +163,12 @@ impl Change {
             }
             Change::Door { index, old, .. } => {
                 room.set_door(*index, *old);
+            }
+            Change::InsertDoor { index, .. } => {
+                room.remove_door(*index);
+            }
+            Change::RemoveDoor { index, door } => {
+                room.insert_door(*index, *door);
             }
             Change::Music { old, .. } => room.set_music(*old),
             Change::Resize { old, .. } => old.restore(room),

@@ -11,7 +11,9 @@
 //! +54   4 bytes  two words, unknown (historically called "entrance")
 //! +58            six sections, each starting with a 16-bit pointer relative
 //!                to itself that leads to the next one. Section 0 holds the
-//!                door list: 10-byte records up to an FFFF terminator.
+//!                door list: 10-byte records up to an FFFF terminator; a
+//!                door's destination counts rooms from the start of the
+//!                level the room belongs to.
 //!                Section 3 lists the breakable cells (`Block`).
 //! then  2 bytes  3DEF in every room
 //!       2 bytes  width in metatiles
@@ -35,6 +37,8 @@ const SECTIONS_OFFSET: usize = 58;
 const SECTION_COUNT: usize = 6;
 const MISC_MUSIC: usize = 2;
 const DOOR_SIZE: usize = 10;
+/// Most doors a room can list: a warp star names its door with one byte.
+pub const MAX_DOORS: usize = 255;
 /// Largest map [`Room::encode`] accepts: both tile planes and a full object
 /// list must fit the 64 KiB a compressed stream can hold.
 pub const MAX_CELLS: usize = 30_000;
@@ -125,7 +129,8 @@ pub struct Block {
 /// A door record of section 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Door {
-    /// Index into the room pointer table.
+    /// The destination, counted from the first room of the level the door
+    /// is in (see [`Door::destination`]); a few values are special.
     pub dest_room: u16,
     /// Trigger position in pixels. `FF00` on both axes marks an exit that is
     /// not entered by walking into it (a warp star, the end of a room).
@@ -136,10 +141,54 @@ pub struct Door {
     pub dest_y: u16,
 }
 
+/// Where a door leads, once its level is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Destination {
+    /// A room of the pointer table.
+    Room(usize),
+    /// `7FFF`: the goal door of a stage (its door star has variant 16).
+    LevelExit,
+    /// Any other value of `4000` and up; the meaning is not established.
+    Special(u16),
+}
+
 impl Door {
+    /// The `dest_room` of a stage's goal door.
+    pub const LEVEL_EXIT: u16 = 0x7FFF;
+    /// The position of a door that has no trigger area: a warp star's
+    /// destination, or the end of a room.
+    pub const NO_TRIGGER: u16 = 0xFF00;
+
     /// False for the exits that have no place in the room.
     pub fn has_trigger(&self) -> bool {
-        self.x != 0xFF00 || self.y != 0xFF00
+        self.x != Self::NO_TRIGGER || self.y != Self::NO_TRIGGER
+    }
+
+    /// The room this door leads to when it is in `level`. Destinations count
+    /// from the level's first room: Float Islands' room 7 leads to "2",
+    /// which is room 8.
+    pub fn destination(&self, level: &Level) -> Destination {
+        match self.dest_room {
+            Self::LEVEL_EXIT => Destination::LevelExit,
+            d if d < 0x4000 => Destination::Room(level.rooms.start + d as usize),
+            d => Destination::Special(d),
+        }
+    }
+
+    /// The `dest_room` value that leads to `room` from a door of `level`,
+    /// when that is expressible.
+    pub fn relative_to(level: &Level, room: usize) -> Option<u16> {
+        room.checked_sub(level.rooms.start)
+            .filter(|&d| d < 0x4000)
+            .map(|d| d as u16)
+    }
+}
+
+impl Object {
+    /// For a warp star, the index in the room's door list of the record that
+    /// says where it goes (a door without a trigger area).
+    pub fn warp_door(&self) -> Option<usize> {
+        (self.id == crate::names::WARP_STAR).then_some(self.variant as usize)
     }
 }
 
@@ -421,9 +470,12 @@ impl Room {
             .collect()
     }
 
-    /// Rewrites door `index` in place. The number of doors is fixed: the
-    /// section that holds them cannot grow without moving the others.
+    /// Rewrites door `index` in place. A destination of `FFFF` is refused:
+    /// it would read as the end of the list.
     pub fn set_door(&mut self, index: usize, door: Door) -> bool {
+        if door.dest_room == 0xFFFF {
+            return false;
+        }
         let Some(at) = self.door_slots().nth(index) else {
             return false;
         };
@@ -432,6 +484,46 @@ impl Room {
             self.head[at + i * 2..at + i * 2 + 2].copy_from_slice(&w.to_le_bytes());
         }
         true
+    }
+
+    /// Replaces the whole door list; the sections after it move. Doors with
+    /// a destination of `FFFF` are left out (it is the terminator).
+    pub fn set_doors(&mut self, doors: &[Door]) {
+        let mut payload = Vec::with_capacity(doors.len() * DOOR_SIZE + 2);
+        for door in doors
+            .iter()
+            .filter(|d| d.dest_room != 0xFFFF)
+            .take(MAX_DOORS)
+        {
+            for word in [door.dest_room, door.x, door.y, door.dest_x, door.dest_y] {
+                payload.extend_from_slice(&word.to_le_bytes());
+            }
+        }
+        payload.extend_from_slice(&[0xFF, 0xFF]);
+        self.set_section(0, &payload);
+    }
+
+    /// Inserts a door at `index` (at most the number of doors). Warp stars
+    /// address doors by index: the caller renumbers them.
+    pub fn insert_door(&mut self, index: usize, door: Door) -> bool {
+        let mut doors = self.doors();
+        if index > doors.len() || doors.len() >= MAX_DOORS || door.dest_room == 0xFFFF {
+            return false;
+        }
+        doors.insert(index, door);
+        self.set_doors(&doors);
+        true
+    }
+
+    /// Removes door `index` and returns it.
+    pub fn remove_door(&mut self, index: usize) -> Option<Door> {
+        let mut doors = self.doors();
+        if index >= doors.len() {
+            return None;
+        }
+        let door = doors.remove(index);
+        self.set_doors(&doors);
+        Some(door)
     }
 
     /// Resizes the map, keeping the top-left cells and filling new ones with
@@ -597,12 +689,21 @@ pub struct Tables {
 
 /// The four stages of Spring Breeze are the first four levels of the table.
 pub const SPRING_BREEZE_LEVELS: std::ops::Range<usize> = 0..4;
-const SPRING_BREEZE_NAMES: [&str; 4] = [
-    "Green Greens",
-    "Float Islands",
-    "Bubbly Clouds",
-    "Mt. Dedede",
-];
+/// The Great Cave Offensive is one level of 81 rooms (72-152): the level
+/// that holds the treasure chests.
+pub const GREAT_CAVE_OFFENSIVE: usize = 15;
+/// The levels the editor lists by name, in order.
+pub const NAMED_LEVELS: [usize; 5] = [0, 1, 2, 3, GREAT_CAVE_OFFENSIVE];
+fn level_name(index: usize) -> Option<&'static str> {
+    Some(match index {
+        0 => "Green Greens",
+        1 => "Float Islands",
+        2 => "Bubbly Clouds",
+        3 => "Mt. Dedede",
+        GREAT_CAVE_OFFENSIVE => "The Great Cave Offensive",
+        _ => return None,
+    })
+}
 const LEVEL_COUNT: usize = 60;
 
 impl Tables {
@@ -633,8 +734,8 @@ impl Tables {
                 } else {
                     room_count
                 };
-                let name = match SPRING_BREEZE_NAMES.get(index) {
-                    Some(name) => (*name).to_string(),
+                let name = match level_name(index) {
+                    Some(name) => name.to_string(),
                     None => format!("Level {index}"),
                 };
                 Level {
@@ -655,6 +756,11 @@ impl Tables {
 
     pub fn room_count(&self) -> usize {
         self.room_offsets.len()
+    }
+
+    /// The level whose range holds `room`.
+    pub fn level_of(&self, room: usize) -> Option<&Level> {
+        self.levels.iter().find(|l| l.rooms.contains(&room))
     }
 
     /// File offset of resource `index` of the graphics/palette table.
@@ -884,6 +990,136 @@ mod tests {
         let mut same = stars.clone();
         same.set_blocks(&blocks);
         assert_eq!(same, stars);
+    }
+
+    #[test]
+    fn door_destinations_count_from_the_level() {
+        let Some(rom) = rom() else { return };
+        let tables = Tables::load(&rom);
+        assert_eq!(tables.levels[GREAT_CAVE_OFFENSIVE].rooms, 72..153);
+        assert_eq!(
+            tables.levels[GREAT_CAVE_OFFENSIVE].name,
+            "The Great Cave Offensive"
+        );
+        // Float Islands room 7 leads to its level's room "2": room 8.
+        let level = tables.level_of(7).unwrap();
+        let door = Room::load(&rom, &tables, 7).unwrap().doors()[0];
+        assert_eq!(door.dest_room, 2);
+        assert_eq!(door.destination(level), Destination::Room(8));
+        assert_eq!(Door::relative_to(level, 8), Some(2));
+        assert_eq!(Door::relative_to(level, 5), None);
+        // The cave's first room leads to room 74, which leads back.
+        let cave = tables.level_of(72).unwrap();
+        let first = Room::load(&rom, &tables, 72).unwrap().doors()[0];
+        assert_eq!(first.destination(cave), Destination::Room(74));
+        let back = Room::load(&rom, &tables, 74).unwrap().doors();
+        assert!(
+            back.iter()
+                .any(|d| d.destination(cave) == Destination::Room(80))
+        );
+        // Read as levels, doors pair up; read as rooms of the table, they do not.
+        let mut paired = [0usize; 2];
+        let loaded: Vec<Option<Room>> = (0..tables.room_count())
+            .map(|i| Room::load(&rom, &tables, i).ok())
+            .collect();
+        let target = |relative: bool, from: usize, d: &Door| -> Option<usize> {
+            let level = tables.level_of(from)?;
+            match (relative, d.destination(level)) {
+                (true, Destination::Room(r)) => Some(r),
+                (false, _) if d.dest_room < 0x4000 => Some(d.dest_room as usize),
+                _ => None,
+            }
+        };
+        for (relative, count) in [true, false].into_iter().zip(paired.iter_mut()) {
+            for (from, room) in loaded.iter().enumerate() {
+                let Some(room) = room else { continue };
+                for door in room.doors().iter().filter(|d| d.has_trigger()) {
+                    let Some(Some(to)) = target(relative, from, door).map(|t| loaded.get(t)) else {
+                        continue;
+                    };
+                    let Some(to) = to else { continue };
+                    let to_index = target(relative, from, door).unwrap();
+                    if to
+                        .doors()
+                        .iter()
+                        .any(|b| target(relative, to_index, b) == Some(from))
+                    {
+                        *count += 1;
+                    }
+                }
+            }
+        }
+        assert!(paired[0] > 200 && paired[1] < 10, "{paired:?}");
+    }
+
+    #[test]
+    fn warp_stars_name_their_door() {
+        let Some(rom) = rom() else { return };
+        let tables = Tables::load(&rom);
+        // Room 1: the warp star at the end uses door 1, which has no trigger.
+        let room = Room::load(&rom, &tables, 1).unwrap();
+        let warp = room
+            .objects
+            .iter()
+            .find(|o| o.warp_door().is_some())
+            .unwrap();
+        assert_eq!(warp.warp_door(), Some(1));
+        assert!(!room.doors()[1].has_trigger());
+        // Room 134 (the cave): variant 8, the ninth door, also without one.
+        let room = Room::load(&rom, &tables, 134).unwrap();
+        let warp = room
+            .objects
+            .iter()
+            .find(|o| o.warp_door().is_some())
+            .unwrap();
+        assert_eq!(warp.warp_door(), Some(8));
+        assert!(!room.doors()[8].has_trigger());
+    }
+
+    #[test]
+    fn doors_can_be_added_and_removed() {
+        let Some(original) = rom() else { return };
+        let mut rom = original.clone();
+        let mut tables = Tables::load(&rom);
+        let mut room = Room::load(&rom, &tables, 3).unwrap();
+        let (doors, blocks, objects) = (room.doors(), room.blocks(), room.objects.clone());
+        let new = Door {
+            dest_room: 1,
+            x: 48,
+            y: 96,
+            dest_x: 60,
+            dest_y: 108,
+        };
+        assert!(room.insert_door(doors.len(), new));
+        assert!(!room.insert_door(99, new));
+        assert!(!room.insert_door(
+            0,
+            Door {
+                dest_room: 0xFFFF,
+                ..new
+            }
+        ));
+        assert_eq!(room.doors().len(), doors.len() + 1);
+        // The sections after the door list moved with it.
+        assert_eq!(room.blocks(), blocks);
+        room.save(&mut rom, &mut tables).unwrap();
+        let back = Room::load(&rom, &tables, 3).unwrap();
+        assert_eq!(back.doors()[doors.len()], new);
+        assert_eq!(back.blocks(), blocks);
+        assert_eq!(back.objects, objects);
+        // Removing it gives the original room back, byte for byte.
+        let mut again = back.clone();
+        assert_eq!(again.remove_door(doors.len()), Some(new));
+        assert_eq!(
+            again.head(),
+            Room::load(&original, &Tables::load(&original), 3)
+                .unwrap()
+                .head()
+        );
+        // A room can lose every door.
+        again.set_doors(&[]);
+        assert!(again.doors().is_empty());
+        assert_eq!(again.blocks(), blocks);
     }
 
     #[test]

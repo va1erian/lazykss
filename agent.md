@@ -1,14 +1,15 @@
 # lazykss
 
-A level editor for the SNES game *Kirby Super Star* (US release, SA-1). The
-first version covers the four stages of Spring Breeze.
+A level editor for the SNES game *Kirby Super Star* (US release, SA-1). It
+covers the four stages of Spring Breeze and The Great Cave Offensive.
 
 ## Layout
 
 - `kss-core/` — no UI dependencies. ROM access (`rom.rs`), the HAL codec
   (`compression.rs`), rooms and the save pipeline (`room.rs`), tileset
   rendering (`gfx.rs`), object sprites (`sprites.rs` and the generated
-  `sprite_table.rs`), names (`names.rs`).
+  `sprite_table.rs`), names (`names.rs`), the cave's treasures
+  (`treasure.rs`).
   Examples: `render_room` (rooms to PPM), `patch_room` (scripted edits).
 - `kss-editor/` — the GUI, on [xui](https://github.com/va1erian/xui).
   `editor.rs` and `history.rs` hold the editing logic and undo, with no UI

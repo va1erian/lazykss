@@ -55,6 +55,8 @@ All output goes to `target/harness/`, which is not committed.
 | `tools/harness/selfcheck.py` | Verifies the three files above against the ROM. |
 | `tools/harness/probe.py` | Traces VRAM contents back to ROM resources; finds where a compressed stream starts. |
 | `tools/harness/experiment_blocks.py` | A complete worked experiment. **Copy it to start a new one.** |
+| `tools/harness/experiment_doors.py` | Added doors, and what a door's destination counts from. |
+| `tools/harness/experiment_treasures.py` | Opens a chest of every treasure number and saves the windows. |
 | `tools/harness/sprites.py` | Regenerates `kss-core/src/sprite_table.rs`. |
 
 ## What you can read
@@ -193,8 +195,15 @@ about a second) and each `enter` about two seconds.
 `patch` takes the arguments of
 `cargo run -p kss-core --example patch_room -- <out> <room> ...`:
 `tile X Y ID`, `object ID VARIANT X Y`, `block X Y AFTER EXTRA`,
+`door DEST X Y DEST_X DEST_Y` (appends a door), `clear-doors`,
 `clear-objects`, `slots HEX8`, `raw OFFSET HEX`, `noise`. Numbers may be
 `0x`-prefixed.
+
+`patch` compiles the working tree. An experiment that runs for minutes
+while you edit `kss-core` fails halfway when the tree stops compiling: build
+`patch_room` once into its own target directory
+(`cargo build -p kss-core --example patch_room --target-dir target/frozen`)
+and call that binary for long runs.
 
 To find which of several differences between two rooms matters, copy them
 across one at a time (bisect). Compare rooms that work with rooms that do
@@ -253,6 +262,17 @@ over entry 1 in a copy of the ROM, and `enter` it. Kirby still starts at the
 left edge near the ground, so check the first screenshot to see where he
 landed.
 
+To play **another level**, move Green Greens' entry of the level table (the
+word at directory entry 6, `0x3F0000 + word(0x3F000C)`) on by `4 * n`
+bytes: the stage then starts `n` rooms later in the room table, and its
+"room 1" is room `n + 1`. Doors count their destination from there.
+`experiment_doors.py` does this to tell a level-relative destination from
+an absolute one.
+
+To **enter a door**, Kirby must stand in the cell the door's position names
+and press Up (`e.tap("Up")`). At the start of room 1 that is cell (1, 6),
+door position (24, 144).
+
 ## Mistakes already made, so you do not repeat them
 
 1. **Trusting sizes that divide evenly.** The metatile table is 13,680 bytes:
@@ -278,7 +298,11 @@ landed.
 8. **Reading a savestate layout as if it were documented.** OAM is found at a
    fixed distance after VRAM in this core's savestate. Another core, or
    another version, will differ; `selfcheck.py` is what tells you.
-9. **Guessing an address.** Every address in `sprite_table.rs` came from a
+9. **A door one cell off.** A door put on the cell above Kirby's head
+   (where the room's own door tile sits, one row up) never triggered, which
+   looked like "added doors do not work". Kirby stands in row 6 at the start
+   of room 1; the door must be on his cell.
+10. **Guessing an address.** Every address in `sprite_table.rs` came from a
    byte-exact match against the running game. Extend it with `sprites.py`,
    not by hand.
 
@@ -290,6 +314,8 @@ landed.
 - Whether a ROM works on **real hardware** or in another emulator. A saved
   ROM was also played in ares by hand; that is the cross-check.
 - Rooms outside Spring Breeze have been loaded and rendered, not played.
+  The Great Cave Offensive's treasure chests and doors were studied in room
+  1 and through its data, not by playing the cave.
 
 ## Reporting what you found
 

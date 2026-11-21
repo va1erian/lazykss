@@ -1,9 +1,11 @@
 # lazykss
 
-A level editor for *Kirby Super Star* (SNES, US release). This first version
-covers the four stages of Spring Breeze: it shows each room as the game draws
-it, with its tiles, background and object sprites decoded from your ROM, and
-lets you paint tiles, place and move objects, edit doors, and save a new ROM.
+A level editor for *Kirby Super Star* (SNES, US release). It covers the four
+stages of Spring Breeze and The Great Cave Offensive: it shows each room as
+the game draws it, with its tiles, background and object sprites decoded from
+your ROM, and lets you paint tiles, place and move objects, add, edit and
+delete doors and warp stars, place the cave's treasure chests (the Treasures
+tab lists all 60 treasures and where each one is), and save a new ROM.
 
 The ROM is not included and must not be added to this repository. Supply your
 own headerless US dump (`SHA-1 cca1e67fa230bf4f60154f5ea55d06568229dc5d`).
