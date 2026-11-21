@@ -211,7 +211,11 @@ fn process<M: 'static>(ctx: &Context<M>, st: &mut ViewState, event: &Event) -> O
                 return Some(out);
             }
             if let Some((start, offset)) = st.pan {
-                st.scroller.offset = (offset.0 - (x - start.0), offset.1 - (y - start.1));
+                // Saturating: the pointer is captured and may leave the window.
+                st.scroller.offset = (
+                    offset.0.saturating_sub(x.saturating_sub(start.0)),
+                    offset.1.saturating_sub(y.saturating_sub(start.1)),
+                );
                 st.scroller.clamp();
                 out.event = Some(MapEvent::ViewChanged);
                 return Some(out);
@@ -266,7 +270,7 @@ fn process<M: 'static>(ctx: &Context<M>, st: &mut ViewState, event: &Event) -> O
         } => {
             let notches = f32::from(delta) / 120.0;
             if modifiers.ctrl && !horizontal {
-                let zoom = st.zoom + if notches > 0.0 { 1 } else { -1 };
+                let zoom = st.zoom.saturating_add(if notches > 0.0 { 1 } else { -1 });
                 if st.set_zoom(zoom, (x, y)) {
                     out.event = Some(MapEvent::ViewChanged);
                 }

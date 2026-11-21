@@ -96,7 +96,11 @@ fn toolbar_row(h: &Handles) -> Layout<Msg> {
     }
     let tools = tools
         .checked(0, true)
-        .on_click(|index| Msg::SetTool(Tool::ALL[index.min(Tool::ALL.len() - 1)]))
+        .on_click(|index| {
+            // A click past the end (which the strip does not make) picks the last.
+            let [.., last] = Tool::ALL;
+            Msg::SetTool(Tool::ALL.get(index).copied().unwrap_or(last))
+        })
         .bind(&h.tools);
 
     let mut layers = toolbar();
@@ -117,7 +121,10 @@ fn toolbar_row(h: &Handles) -> Layout<Msg> {
         layers = layers.checked(index, layer != Layer::Grid);
     }
     let layers = layers
-        .on_click(|index| Msg::Layer(Layer::ALL[index.min(Layer::ALL.len() - 1)]))
+        .on_click(|index| {
+            let [.., last] = Layer::ALL;
+            Msg::Layer(Layer::ALL.get(index).copied().unwrap_or(last))
+        })
         .bind(&h.layers);
 
     row().padding(6).gap(8).children((

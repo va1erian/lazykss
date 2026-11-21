@@ -22,52 +22,32 @@
 //! Both layers index one shared character space and one 256-colour palette,
 //! as in VRAM/CGRAM while the room runs.
 
+mod chars;
+mod image;
+
+pub(crate) use chars::{CHAR_BYTES, Char, char_pixels, decode_char, le_words};
+pub use image::Image;
+
 use crate::compression;
 use crate::rom::Rom;
 use crate::room::{CELL, Room, Tables};
 
 const CHARS: usize = 0x800;
-const BG_CHAR_BASE: usize = 0x280;
+/// Byte offset of the background characters in the character space.
+const BG_CHAR_OFFSET: usize = 0x280 * CHAR_BYTES;
 const PLANES: usize = 9;
-
-/// An RGBA8 image, rows top to bottom.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Image {
-    pub width: usize,
-    pub height: usize,
-    /// `width * height * 4` bytes.
-    pub rgba: Vec<u8>,
-}
-
-impl Image {
-    pub fn new(width: usize, height: usize) -> Self {
-        Self {
-            width,
-            height,
-            rgba: vec![0; width * height * 4],
-        }
-    }
-
-    pub fn filled(width: usize, height: usize, color: [u8; 4]) -> Self {
-        Self {
-            width,
-            height,
-            rgba: color.repeat(width * height),
-        }
-    }
-
-    pub fn pixel(&self, x: usize, y: usize) -> [u8; 4] {
-        let at = (y * self.width + x) * 4;
-        self.rgba[at..at + 4].try_into().expect("4 bytes")
-    }
-
-    fn put(&mut self, x: usize, y: usize, color: [u8; 4]) {
-        if x < self.width && y < self.height {
-            let at = (y * self.width + x) * 4;
-            self.rgba[at..at + 4].copy_from_slice(&color);
-        }
-    }
-}
+/// Top-left corner of each character of a metatile, in plane order.
+const BLOCK_OFFSETS: [(isize, isize); PLANES] = [
+    (0, 0),
+    (8, 0),
+    (16, 0),
+    (0, 8),
+    (8, 8),
+    (16, 8),
+    (0, 16),
+    (8, 16),
+    (16, 16),
+];
 
 /// Which parts of a room [`Tileset::render_room`] draws.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,12 +71,22 @@ pub fn bgr555(word: u16) -> [u8; 4] {
     [channel(word), channel(word >> 5), channel(word >> 10), 255]
 }
 
+/// `origin + delta` as an image coordinate; `None` left of or above the
+/// image.
+fn coordinate(origin: isize, delta: usize) -> Option<usize> {
+    usize::try_from(origin.checked_add_unsigned(delta)?).ok()
+}
+
+/// Pixel position of tile `index` of `size` pixels.
+fn tile_origin(index: usize, size: usize) -> isize {
+    isize::try_from(index.saturating_mul(size)).unwrap_or(isize::MAX)
+}
+
 /// Everything needed to draw a room's two tile layers.
 #[derive(Debug, Clone)]
 pub struct Tileset {
-    /// Palette index (0-15) of every pixel of every character, 64 per
-    /// character.
-    pixels: Vec<u8>,
+    /// Every character of the shared character space.
+    pixels: Vec<Char>,
     palette: [[u8; 4]; 256],
     /// `[position][metatile]` tilemap words.
     planes: Vec<Vec<u16>>,
@@ -106,87 +96,97 @@ pub struct Tileset {
     bg_map: Vec<u16>,
 }
 
+/// Applies a raw palette resource (count, first colour, BGR555 words).
+/// Colours that would fall past entry 255 or past the ROM are skipped.
+fn apply_palette(data: &[u8], palette: &mut [[u8; 4]; 256]) {
+    let Some((&[count, first], words)) = data.split_first_chunk::<2>() else {
+        return;
+    };
+    let colours = le_words(words).take(count.into()).map(bgr555);
+    for (slot, colour) in palette.iter_mut().skip(first.into()).zip(colours) {
+        *slot = colour;
+    }
+}
+
+/// Splits a metatile table into its nine planes and its attribute bytes.
+/// A short table gives as many whole metatiles as it holds.
+fn split_metatiles(table: &[u8]) -> (Vec<Vec<u16>>, Vec<u8>) {
+    let count = table.len() / (PLANES * 2 + 1);
+    let plane_len = count.saturating_mul(2);
+    let Some((words, rest)) = plane_len
+        .checked_mul(PLANES)
+        .and_then(|len| table.split_at_checked(len))
+    else {
+        return (vec![Vec::new(); PLANES], Vec::new());
+    };
+    let planes = if plane_len == 0 {
+        vec![Vec::new(); PLANES]
+    } else {
+        words
+            .chunks_exact(plane_len)
+            .map(|plane| le_words(plane).collect())
+            .collect()
+    };
+    let attributes = rest.get(..count).unwrap_or_default().to_vec();
+    (planes, attributes)
+}
+
+/// Reads a background tilemap resource: width and height words, then a
+/// compressed map of at least `width * height` words.
+fn load_background(data: &[u8]) -> Option<(usize, usize, Vec<u16>)> {
+    let (&[w0, w1, h0, h1], stream) = data.split_first_chunk::<4>()?;
+    let width = usize::from(u16::from_le_bytes([w0, w1]));
+    let height = usize::from(u16::from_le_bytes([h0, h1]));
+    let (map, _) = compression::decompress(stream).ok()?;
+    let needed = width.checked_mul(height)?.checked_mul(2)?;
+    (width > 0 && height > 0 && map.len() >= needed)
+        .then(|| (width, height, le_words(&map).collect()))
+}
+
 impl Tileset {
     /// Loads the resources a graphics header names. A missing or malformed
     /// resource leaves its part empty: the rest still draws.
     pub fn load(rom: &Rom, tables: &Tables, header: &[u8; 24]) -> Self {
-        let resource = |index: usize| tables.resource(rom, index);
+        let resource = |index: usize| {
+            tables
+                .resource(rom, index)
+                .and_then(|at| rom.data().get(at..))
+        };
         let unpack = |index: usize| {
             resource(index)
-                .and_then(|at| compression::decompress(&rom.data()[at..]).ok())
+                .and_then(|data| compression::decompress(data).ok())
                 .map(|(data, _)| data)
                 .unwrap_or_default()
         };
 
         let mut palette = [[0, 0, 0, 255]; 256];
         for index in [header[19], header[3], header[8]] {
-            let Some(at) = resource(index as usize).filter(|&at| at + 2 <= rom.data().len()) else {
-                continue;
-            };
-            let (count, first) = (rom.u8(at) as usize, rom.u8(at + 1) as usize);
-            for i in 0..count {
-                if first + i < 256 && at + 4 + i * 2 <= rom.data().len() {
-                    palette[first + i] = bgr555(rom.u16(at + 2 + i * 2));
-                }
+            if let Some(data) = resource(index.into()) {
+                apply_palette(data, &mut palette);
             }
         }
 
-        let mut chars = vec![0u8; CHARS * 32];
-        let mut place = |data: &[u8], first: usize| {
-            let room = chars.len() - first * 32;
-            let len = data.len().min(room);
-            chars[first * 32..first * 32 + len].copy_from_slice(&data[..len]);
+        let mut chars = vec![0u8; CHARS * CHAR_BYTES];
+        let mut place = |data: &[u8], at: usize| {
+            for (dst, src) in chars.iter_mut().skip(at).zip(data) {
+                *dst = *src;
+            }
         };
         // The foreground set is loaded last: it overlaps the start of the
         // background set.
-        place(&unpack(header[7] as usize), BG_CHAR_BASE);
-        place(&unpack(header[2] as usize), 0);
-        let mut pixels = vec![0u8; CHARS * 64];
-        for (tile, out) in chars.chunks_exact(32).zip(pixels.chunks_exact_mut(64)) {
-            for y in 0..8 {
-                let rows = [
-                    tile[y * 2],
-                    tile[y * 2 + 1],
-                    tile[16 + y * 2],
-                    tile[17 + y * 2],
-                ];
-                for x in 0..8 {
-                    let shift = 7 - x;
-                    out[y * 8 + x] = rows
-                        .iter()
-                        .enumerate()
-                        .fold(0, |acc, (bit, row)| acc | ((row >> shift) & 1) << bit);
-                }
-            }
-        }
-
-        let table = unpack(header[5] as usize | (header[6] as usize) << 8);
-        let count = table.len() / (PLANES * 2 + 1);
-        let planes = (0..PLANES)
-            .map(|p| {
-                table[p * count * 2..(p + 1) * count * 2]
-                    .chunks_exact(2)
-                    .map(|w| u16::from_le_bytes([w[0], w[1]]))
-                    .collect()
-            })
+        place(&unpack(header[7].into()), BG_CHAR_OFFSET);
+        place(&unpack(header[2].into()), 0);
+        let pixels = chars
+            .chunks_exact(CHAR_BYTES)
+            .filter_map(decode_char)
             .collect();
-        let attributes = table[PLANES * count * 2..PLANES * count * 2 + count].to_vec();
 
-        let (mut bg_width, mut bg_height, mut bg_map) = (0, 0, Vec::new());
-        if let Some(at) = resource(header[10] as usize).filter(|&at| at + 4 <= rom.data().len()) {
-            let (w, h) = (rom.u16(at) as usize, rom.u16(at + 2) as usize);
-            if let Ok((data, _)) = compression::decompress(&rom.data()[at + 4..])
-                && w > 0
-                && h > 0
-                && data.len() >= w * h * 2
-            {
-                bg_map = data
-                    .chunks_exact(2)
-                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                    .collect();
-                (bg_width, bg_height) = (w, h);
-            }
-        }
+        let table = unpack(usize::from(header[5]) | usize::from(header[6]) << 8);
+        let (planes, attributes) = split_metatiles(&table);
+
+        let (bg_width, bg_height, bg_map) = resource(header[10].into())
+            .and_then(load_background)
+            .unwrap_or_default();
 
         Self {
             pixels,
@@ -210,7 +210,10 @@ impl Tileset {
 
     /// The attribute (collision class) byte of a metatile.
     pub fn attribute(&self, metatile: u16) -> u8 {
-        self.attributes.get(metatile as usize).copied().unwrap_or(0)
+        self.attributes
+            .get(usize::from(metatile))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// True for star, bomb and similar blocks (attribute `70`-`7F`). They
@@ -229,42 +232,48 @@ impl Tileset {
         self.palette[0]
     }
 
+    fn char(&self, word: u16) -> Option<&Char> {
+        self.pixels.get(usize::from(word & 0x3FF))
+    }
+
     /// True when every character of the metatile is fully transparent.
     pub fn is_blank(&self, metatile: u16) -> bool {
         let Some(words) = self.words(metatile) else {
             return true;
         };
-        words.iter().all(|w| {
-            let c = (w & 0x3FF) as usize;
-            self.pixels[c * 64..c * 64 + 64].iter().all(|&p| p == 0)
-        })
+        words
+            .iter()
+            .filter_map(|&w| self.char(w))
+            .all(|c| c.iter().flatten().all(|&p| p == 0))
     }
 
     fn words(&self, metatile: u16) -> Option<[u16; PLANES]> {
-        let m = metatile as usize;
-        (m < self.metatile_count()).then(|| std::array::from_fn(|p| self.planes[p][m]))
+        let m = usize::from(metatile);
+        let mut words = [0; PLANES];
+        for (word, plane) in words.iter_mut().zip(&self.planes) {
+            *word = *plane.get(m)?;
+        }
+        Some(words)
     }
 
     /// Draws one 8x8 character from a tilemap word. Colour 0 is skipped
     /// unless `opaque`.
     fn draw_char(&self, image: &mut Image, x0: isize, y0: isize, word: u16, opaque: bool) {
-        let c = (word & 0x3FF) as usize;
-        let row = ((word >> 10) & 7) as usize * 16;
+        let Some(char) = self.char(word) else {
+            return;
+        };
+        // Sixteen colours per palette row: the row number is the high nibble.
+        let row = usize::from((word >> 10) & 7) << 4;
         let (hflip, vflip) = (word & 0x4000 != 0, word & 0x8000 != 0);
-        let pixels = &self.pixels[c * 64..c * 64 + 64];
-        for y in 0..8 {
-            let py = y0 + y as isize;
-            if py < 0 {
+        for (x, y, value) in char_pixels(char, hflip, vflip) {
+            if value == 0 && !opaque {
                 continue;
             }
-            let sy = if vflip { 7 - y } else { y };
-            for x in 0..8 {
-                let px = x0 + x as isize;
-                let sx = if hflip { 7 - x } else { x };
-                let value = pixels[sy * 8 + sx];
-                if px >= 0 && (value != 0 || opaque) {
-                    image.put(px as usize, py as usize, self.palette[row + value as usize]);
-                }
+            let (Some(px), Some(py)) = (coordinate(x0, x), coordinate(y0, y)) else {
+                continue;
+            };
+            if let Some(&colour) = self.palette.get(row | usize::from(value)) {
+                image.put(px, py, colour);
             }
         }
     }
@@ -274,14 +283,9 @@ impl Tileset {
         let Some(words) = self.words(metatile) else {
             return;
         };
-        for (i, word) in words.into_iter().enumerate() {
-            self.draw_char(
-                image,
-                x + (i % 3 * 8) as isize,
-                y + (i / 3 * 8) as isize,
-                word,
-                false,
-            );
+        for (word, (dx, dy)) in words.into_iter().zip(BLOCK_OFFSETS) {
+            let (cx, cy) = (x.saturating_add(dx), y.saturating_add(dy));
+            self.draw_char(image, cx, cy, word, false);
         }
     }
 
@@ -297,13 +301,13 @@ impl Tileset {
     pub fn metatile_sheet(&self, columns: usize, fill: [u8; 4]) -> Image {
         let columns = columns.max(1);
         let rows = self.metatile_count().div_ceil(columns);
-        let mut image = Image::filled(columns * CELL, rows * CELL, fill);
-        for id in 0..self.metatile_count() {
-            let (x, y) = (
-                (id % columns * CELL) as isize,
-                (id / columns * CELL) as isize,
-            );
-            self.draw_metatile(&mut image, x, y, id as u16);
+        let size = |cells: usize| cells.saturating_mul(CELL);
+        let mut image = Image::filled(size(columns), size(rows), fill);
+        let cells = (0..rows).flat_map(|row| (0..columns).map(move |column| (column, row)));
+        let ids = (0..=u16::MAX).take(self.metatile_count());
+        for (id, (column, row)) in ids.zip(cells) {
+            let (x, y) = (tile_origin(column, CELL), tile_origin(row, CELL));
+            self.draw_metatile(&mut image, x, y, id);
         }
         image
     }
@@ -311,32 +315,31 @@ impl Tileset {
     /// The background layer tiled over a `width` x `height` pixel area. The
     /// game scrolls it at its own rate; here it is pinned to the origin.
     pub fn draw_background(&self, image: &mut Image) {
-        if self.bg_map.is_empty() {
+        if self.bg_width == 0 {
             return;
         }
-        for ty in 0..image.height.div_ceil(8) {
-            for tx in 0..image.width.div_ceil(8) {
-                let word = self.bg_map[ty % self.bg_height * self.bg_width + tx % self.bg_width];
-                self.draw_char(image, (tx * 8) as isize, (ty * 8) as isize, word, false);
+        let rows = self.bg_map.chunks_exact(self.bg_width).take(self.bg_height);
+        let (columns, lines) = (image.width.div_ceil(8), image.height.div_ceil(8));
+        for (ty, row) in (0..lines).zip(rows.cycle()) {
+            for (tx, &word) in (0..columns).zip(row.iter().cycle()) {
+                let (x, y) = (tile_origin(tx, 8), tile_origin(ty, 8));
+                self.draw_char(image, x, y, word, false);
             }
         }
     }
 
     /// Renders a whole room at one pixel per SNES pixel.
     pub fn render_room(&self, room: &Room, layers: Layers) -> Image {
-        let mut image = Image::filled(room.width * CELL, room.height * CELL, self.backdrop());
+        let size = |cells: usize| cells.saturating_mul(CELL);
+        let mut image = Image::filled(size(room.width), size(room.height), self.backdrop());
         if layers.background {
             self.draw_background(&mut image);
         }
         if layers.foreground {
             for y in 0..room.height {
                 for x in 0..room.width {
-                    self.draw_metatile(
-                        &mut image,
-                        (x * CELL) as isize,
-                        (y * CELL) as isize,
-                        room.tile(x, y),
-                    );
+                    let (px, py) = (tile_origin(x, CELL), tile_origin(y, CELL));
+                    self.draw_metatile(&mut image, px, py, room.tile(x, y));
                 }
             }
         }
@@ -353,6 +356,38 @@ mod tests {
         assert_eq!(bgr555(0x001F), [255, 0, 0, 255]);
         assert_eq!(bgr555(0x03E0), [0, 255, 0, 255]);
         assert_eq!(bgr555(0x7C00), [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn malformed_resources_do_not_panic() {
+        assert_eq!(decode_char(&[0xFF; 31]), None);
+        assert_eq!(decode_char(&[0xFF; 32]), Some([[15; 8]; 8]));
+        let mut palette = [[0; 4]; 256];
+        apply_palette(&[], &mut palette);
+        apply_palette(&[0xFF, 0xF0, 0x1F, 0x00, 0x1F], &mut palette);
+        assert_eq!(palette[0xF0], bgr555(0x1F));
+        assert_eq!(palette[0xF1], [0; 4]);
+        for len in [0, 1, 18, 19, 20, 57] {
+            let (planes, attributes) = split_metatiles(&vec![1; len]);
+            assert_eq!(planes.len(), PLANES);
+            assert!(planes.iter().all(|p| p.len() == attributes.len()));
+        }
+        assert_eq!(load_background(&[1, 0, 1]), None);
+        assert_eq!(load_background(&[0, 0, 1, 0, 0x00, 1, 0xFF]), None);
+        assert_eq!(
+            load_background(&[1, 0, 1, 0, 0x01, 1, 2, 0xFF]).unwrap().2,
+            [0x201]
+        );
+        // The map promises more words than the stream holds.
+        assert_eq!(load_background(&[2, 0, 1, 0, 0x01, 1, 2, 0xFF]), None);
+
+        let mut image = Image::new(2, 2);
+        image.put(2, 0, [9; 4]);
+        image.put(usize::MAX, usize::MAX, [9; 4]);
+        assert!(image.rgba.iter().all(|&b| b == 0));
+        assert_eq!(image.pixel(5, 5), [0; 4]);
+        let huge = Image::new(usize::MAX, 2);
+        assert_eq!((huge.width, huge.height, huge.rgba.len()), (0, 0, 0));
     }
 
     #[test]

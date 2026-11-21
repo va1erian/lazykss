@@ -15,7 +15,9 @@
 //! | 6 | back-reference, reading backwards |
 //! | 7 | (only reachable through the extended form) same as 4 |
 
-use std::collections::HashMap;
+mod encode;
+
+pub use encode::compress;
 
 /// Largest output the game's decompressor can produce.
 pub const MAX_OUTPUT: usize = 0x10000;
@@ -45,294 +47,112 @@ impl std::fmt::Display for DecompressError {
 
 impl std::error::Error for DecompressError {}
 
+/// Reads a stream front to back, failing at its end instead of panicking.
+struct Reader<'a> {
+    input: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, len: usize) -> Result<&'a [u8], DecompressError> {
+        let end = self
+            .pos
+            .checked_add(len)
+            .ok_or(DecompressError::UnexpectedEof)?;
+        let bytes = self
+            .input
+            .get(self.pos..end)
+            .ok_or(DecompressError::UnexpectedEof)?;
+        self.pos = end;
+        Ok(bytes)
+    }
+
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], DecompressError> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| DecompressError::UnexpectedEof)
+    }
+
+    fn byte(&mut self) -> Result<u8, DecompressError> {
+        self.array::<1>().map(|[b]| b)
+    }
+}
+
 /// Decompresses the stream starting at `input[0]`.
 ///
 /// Returns the output and the number of input bytes consumed, terminator
-/// included.
+/// included. A chunk that would take the output past [`MAX_OUTPUT`] is
+/// refused before anything is written, so a hostile stream cannot make the
+/// output grow without bound.
 pub fn decompress(input: &[u8]) -> Result<(Vec<u8>, usize), DecompressError> {
     let mut out: Vec<u8> = Vec::new();
-    let mut pos = 0usize;
-    let byte = |pos: usize| {
-        input
-            .get(pos)
-            .copied()
-            .ok_or(DecompressError::UnexpectedEof)
-    };
+    let mut reader = Reader { input, pos: 0 };
     loop {
-        let at = pos;
-        let control = byte(pos)?;
-        pos += 1;
+        let at = reader.pos;
+        let control = reader.byte()?;
         if control == 0xFF {
-            return Ok((out, pos));
+            return Ok((out, reader.pos));
         }
         let (cmd, len) = if control & 0xE0 == 0xE0 {
-            let len = ((control as usize & 3) << 8 | byte(pos)? as usize) + 1;
-            pos += 1;
-            ((control >> 2) & 7, len)
+            let low = reader.byte()?;
+            let field = usize::from(control & 3) << 8 | usize::from(low);
+            ((control >> 2) & 7, run_length(field))
         } else {
-            (control >> 5, (control as usize & 0x1F) + 1)
+            (control >> 5, run_length(usize::from(control & 0x1F)))
         };
-        match cmd {
-            0 => {
-                let run = input
-                    .get(pos..pos + len)
-                    .ok_or(DecompressError::UnexpectedEof)?;
-                out.extend_from_slice(run);
-                pos += len;
-            }
-            1 => {
-                let value = byte(pos)?;
-                pos += 1;
-                out.resize(out.len() + len, value);
-            }
-            2 => {
-                let (a, b) = (byte(pos)?, byte(pos + 1)?);
-                pos += 2;
-                for _ in 0..len {
-                    out.push(a);
-                    out.push(b);
-                }
-            }
-            3 => {
-                let value = byte(pos)?;
-                pos += 1;
-                for i in 0..len {
-                    out.push(value.wrapping_add(i as u8));
-                }
-            }
-            _ => {
-                let offset = (byte(pos)? as usize) << 8 | byte(pos + 1)? as usize;
-                pos += 2;
-                for i in 0..len {
-                    let src = if cmd == 6 {
-                        offset.checked_sub(i)
-                    } else {
-                        Some(offset + i)
-                    };
-                    let value = src
-                        .and_then(|s| out.get(s).copied())
-                        .ok_or(DecompressError::BadReference { at })?;
-                    out.push(if cmd == 5 {
-                        value.reverse_bits()
-                    } else {
-                        value
-                    });
-                }
-            }
-        }
-        if out.len() > MAX_OUTPUT {
+        // 16-bit RLE counts pairs; every other command counts bytes.
+        let produced = if cmd == 2 { len.saturating_mul(2) } else { len };
+        if out.len().saturating_add(produced) > MAX_OUTPUT {
             return Err(DecompressError::TooLarge);
         }
-    }
-}
-
-/// The longest run of one command at one position. Any shorter run of the
-/// same command is valid too.
-#[derive(Clone, Copy, Default)]
-struct Candidate {
-    cmd: u8,
-    /// Longest usable value of the length field + 1 (pairs for 16-bit RLE).
-    max: u16,
-    /// Operand: fill byte(s) or back-reference offset.
-    arg: u16,
-}
-
-impl Candidate {
-    /// Encoded size of a run of `count`.
-    fn cost(&self, count: usize) -> usize {
-        header_len(count) + if matches!(self.cmd, 1 | 3) { 1 } else { 2 }
-    }
-
-    /// Input bytes a run of `count` covers.
-    fn covers(&self, count: usize) -> usize {
-        if self.cmd == 2 { count * 2 } else { count }
-    }
-}
-
-fn header_len(count: usize) -> usize {
-    if count > 32 { 2 } else { 1 }
-}
-
-fn emit_header(out: &mut Vec<u8>, cmd: u8, count: usize) {
-    debug_assert!((1..=MAX_RUN).contains(&count));
-    let n = count - 1;
-    if n < 32 {
-        out.push(cmd << 5 | n as u8);
-    } else {
-        out.push(0xE0 | cmd << 2 | (n >> 8) as u8);
-        out.push(n as u8);
-    }
-}
-
-/// Number of earlier occurrences tried per back-reference kind.
-const CHAIN: usize = 128;
-const KINDS: usize = 6;
-
-/// Finds, for every position, the longest run of each command.
-fn candidates(data: &[u8]) -> Vec<[Candidate; KINDS]> {
-    let n = data.len();
-    // Earlier positions, keyed by the three bytes a reference of each kind
-    // would start with.
-    let mut forward: HashMap<[u8; 3], Vec<u32>> = HashMap::new();
-    let mut reversed: HashMap<[u8; 3], Vec<u32>> = HashMap::new();
-    let mut backward: HashMap<[u8; 3], Vec<u32>> = HashMap::new();
-    let mut all = Vec::with_capacity(n);
-    for pos in 0..n {
-        if pos > 0 {
-            let p = pos - 1;
-            if p + 2 < n {
-                forward
-                    .entry([data[p], data[p + 1], data[p + 2]])
-                    .or_default()
-                    .push(p as u32);
-                let bits = [
-                    data[p].reverse_bits(),
-                    data[p + 1].reverse_bits(),
-                    data[p + 2].reverse_bits(),
-                ];
-                reversed.entry(bits).or_default().push(p as u32);
+        match cmd {
+            0 => out.extend_from_slice(reader.take(len)?),
+            1 => {
+                let value = reader.byte()?;
+                out.extend(std::iter::repeat_n(value, len));
             }
-            if p >= 2 {
-                backward
-                    .entry([data[p], data[p - 1], data[p - 2]])
-                    .or_default()
-                    .push(p as u32);
+            2 => {
+                let pair = reader.array::<2>()?;
+                out.extend(std::iter::repeat_n(pair, len).flatten());
+            }
+            3 => {
+                let first = reader.byte()?;
+                // The counter is a byte in the game too: it wraps past FF.
+                out.extend((0..len).map(|i| first.wrapping_add(i as u8)));
+            }
+            _ => {
+                let offset = usize::from(u16::from_be_bytes(reader.array::<2>()?));
+                copy_reference(&mut out, cmd, offset, len)
+                    .ok_or(DecompressError::BadReference { at })?;
             }
         }
-        let rest = &data[pos..];
-        let limit = rest.len().min(MAX_RUN);
-        let mut found = [Candidate::default(); KINDS];
-
-        let run = rest[..limit].iter().take_while(|&&b| b == rest[0]).count();
-        found[0] = Candidate {
-            cmd: 1,
-            max: run as u16,
-            arg: rest[0] as u16,
-        };
-        if rest.len() >= 2 {
-            let pairs = rest
-                .chunks_exact(2)
-                .take(MAX_RUN)
-                .take_while(|c| c[0] == rest[0] && c[1] == rest[1])
-                .count();
-            found[1] = Candidate {
-                cmd: 2,
-                max: pairs as u16,
-                arg: (rest[0] as u16) << 8 | rest[1] as u16,
-            };
-        }
-        let rising = rest[..limit]
-            .iter()
-            .enumerate()
-            .take_while(|&(i, &b)| b == rest[0].wrapping_add(i as u8))
-            .count();
-        found[2] = Candidate {
-            cmd: 3,
-            max: rising as u16,
-            arg: rest[0] as u16,
-        };
-
-        // A run that already spans the whole window costs two or three bytes:
-        // no back-reference beats it, and uniform data is where the search
-        // for one is slowest.
-        if rest.len() >= 3 && run < limit {
-            let key = [rest[0], rest[1], rest[2]];
-            let mut longest =
-                |slot: usize, cmd: u8, list: Option<&Vec<u32>>, len_at: &dyn Fn(usize) -> usize| {
-                    for &start in list.into_iter().flatten().rev().take(CHAIN) {
-                        let len = len_at(start as usize);
-                        if len > found[slot].max as usize {
-                            found[slot] = Candidate {
-                                cmd,
-                                max: len as u16,
-                                arg: start as u16,
-                            };
-                        }
-                        // Nothing is longer than a full-length match.
-                        if len == limit {
-                            break;
-                        }
-                    }
-                };
-            // The source of a forward copy may run into the bytes being
-            // written: the decompressor copies one byte at a time.
-            longest(3, 4, forward.get(&key), &|start| {
-                (0..limit)
-                    .take_while(|&i| data[start + i] == rest[i])
-                    .count()
-            });
-            longest(4, 5, reversed.get(&key), &|start| {
-                (0..limit)
-                    .take_while(|&i| data[start + i].reverse_bits() == rest[i])
-                    .count()
-            });
-            longest(5, 6, backward.get(&key), &|start| {
-                (0..limit.min(start + 1))
-                    .take_while(|&i| data[start - i] == rest[i])
-                    .count()
-            });
-        }
-        all.push(found);
     }
-    all
 }
 
-/// Compresses `data` into a stream [`decompress`] (and the game) inflates
-/// back to exactly `data`. The parse is optimal for the runs considered.
-///
-/// # Panics
-///
-/// Panics if `data` is longer than [`MAX_OUTPUT`]: back-reference offsets are
-/// 16 bits.
-pub fn compress(data: &[u8]) -> Vec<u8> {
-    assert!(data.len() <= MAX_OUTPUT, "HAL streams hold at most 64 KiB");
-    let n = data.len();
-    let found = candidates(data);
+/// The run length a length field encodes: the field holds length - 1.
+fn run_length(field: usize) -> usize {
+    field.saturating_add(1)
+}
 
-    // cost[i]: fewest bytes that encode data[i..]. choice[i]: the chunk that
-    // achieves it, as (kind, count); kind KINDS is a literal run.
-    let mut cost = vec![0usize; n + 1];
-    let mut choice = vec![(KINDS as u8, 0u16); n + 1];
-    for pos in (0..n).rev() {
-        let mut best = (usize::MAX, KINDS as u8, 0u16);
-        for count in 1..=(n - pos).min(MAX_RUN) {
-            let total = header_len(count) + count + cost[pos + count];
-            if total < best.0 {
-                best = (total, KINDS as u8, count as u16);
-            }
-        }
-        for (kind, candidate) in found[pos].iter().enumerate() {
-            for count in 1..=candidate.max as usize {
-                let total = candidate.cost(count) + cost[pos + candidate.covers(count)];
-                if total < best.0 {
-                    best = (total, kind as u8, count as u16);
-                }
-            }
-        }
-        cost[pos] = best.0;
-        choice[pos] = (best.1, best.2);
-    }
-
-    let mut out = Vec::with_capacity(cost[0] + 1);
-    let mut pos = 0;
-    while pos < n {
-        let (kind, count) = (choice[pos].0 as usize, choice[pos].1 as usize);
-        if kind == KINDS {
-            emit_header(&mut out, 0, count);
-            out.extend_from_slice(&data[pos..pos + count]);
-            pos += count;
+/// Appends `len` bytes copied from `offset` in the output produced so far
+/// (commands 4-7). `None` when the source leaves that output.
+fn copy_reference(out: &mut Vec<u8>, cmd: u8, offset: usize, len: usize) -> Option<()> {
+    for i in 0..len {
+        // One byte at a time: a forward source may run into the bytes this
+        // very copy is writing, which is how the game repeats a pattern.
+        let src = if cmd == 6 {
+            offset.checked_sub(i)?
         } else {
-            let candidate = found[pos][kind];
-            emit_header(&mut out, candidate.cmd, count);
-            match candidate.cmd {
-                1 | 3 => out.push(candidate.arg as u8),
-                _ => out.extend_from_slice(&candidate.arg.to_be_bytes()),
-            }
-            pos += candidate.covers(count);
-        }
+            offset.checked_add(i)?
+        };
+        let value = *out.get(src)?;
+        out.push(if cmd == 5 {
+            value.reverse_bits()
+        } else {
+            value
+        });
     }
-    out.push(0xFF);
-    out
+    Some(())
 }
 
 #[cfg(test)]
@@ -378,6 +198,55 @@ mod tests {
             decompress(&[0x80, 0, 0, 0xFF]),
             Err(DecompressError::BadReference { at: 0 })
         );
+        // Backward copy from before the start of the output.
+        assert_eq!(
+            decompress(&[0x00, 7, 0xC2, 0, 0, 0xFF]),
+            Err(DecompressError::BadReference { at: 2 })
+        );
+        // Truncated extended header and truncated operands.
+        for stream in [&[0xE4][..], &[0x20], &[0x40, 1], &[0x80, 0], &[]] {
+            assert_eq!(decompress(stream), Err(DecompressError::UnexpectedEof));
+        }
+    }
+
+    #[test]
+    fn refuses_output_past_the_limit() {
+        // 64 maximal RLE chunks reach 64 KiB exactly; one more byte is too much.
+        let mut stream = [0xE7, 0xFF, 0x00].repeat(64);
+        stream.push(0xFF);
+        assert_eq!(decompress(&stream).unwrap().0.len(), MAX_OUTPUT);
+        stream.pop();
+        stream.extend_from_slice(&[0x20, 0x00, 0xFF]);
+        assert_eq!(decompress(&stream), Err(DecompressError::TooLarge));
+        // A stream of self-copies cannot grow without bound either.
+        let mut copies = vec![0x00, 0x00];
+        copies.extend([0xF3, 0xFF, 0x00, 0x00].repeat(1000));
+        assert_eq!(decompress(&copies), Err(DecompressError::TooLarge));
+    }
+
+    #[test]
+    fn arbitrary_input_never_panics() {
+        let mut seed = 0x2545_F491u32;
+        for _ in 0..2000 {
+            let len = (seed % 64) as usize;
+            let input: Vec<u8> = (0..len)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (seed >> 24) as u8
+                })
+                .collect();
+            if let Ok((out, used)) = decompress(&input) {
+                assert!(out.len() <= MAX_OUTPUT && used <= input.len());
+            }
+        }
+    }
+
+    #[test]
+    fn oversized_data_still_encodes() {
+        let data: Vec<u8> = (0..MAX_OUTPUT + 300).map(|i| (i % 251) as u8).collect();
+        let packed = compress(&data);
+        assert_eq!(packed.last(), Some(&0xFF));
+        assert_eq!(decompress(&packed), Err(DecompressError::TooLarge));
     }
 
     #[test]

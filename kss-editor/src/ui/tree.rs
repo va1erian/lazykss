@@ -32,8 +32,9 @@ pub fn group_index(node: Node) -> Option<usize> {
 /// (81 rooms) and the other rooms start collapsed.
 pub fn initial_expansion() -> [bool; GROUPS] {
     let mut expanded = [false; GROUPS];
-    for (i, &level) in NAMED_LEVELS.iter().enumerate() {
-        expanded[i] = level != GREAT_CAVE_OFFENSIVE;
+    // `GROUPS` has one flag per named level, then "Other" (left false).
+    for (flag, &level) in expanded.iter_mut().zip(NAMED_LEVELS.iter()) {
+        *flag = level != GREAT_CAVE_OFFENSIVE;
     }
     expanded
 }
@@ -65,7 +66,7 @@ pub fn rows(editor: &Editor, expanded: &[bool; GROUPS]) -> (Vec<TreeRow>, Vec<No
         rows.push(
             TreeRow::new(label, 0)
                 .expandable(true)
-                .expanded(expanded[group]),
+                .expanded(expanded.get(group).copied().unwrap_or(false)),
         );
         nodes.push(Node::Level(group));
         for room in rooms {
@@ -84,7 +85,7 @@ pub fn rows(editor: &Editor, expanded: &[bool; GROUPS]) -> (Vec<TreeRow>, Vec<No
         rows.push(
             TreeRow::new(label, 0)
                 .expandable(true)
-                .expanded(expanded[NAMED_LEVELS.len()]),
+                .expanded(expanded.get(NAMED_LEVELS.len()).copied().unwrap_or(false)),
         );
         nodes.push(Node::Other);
         for room in others {

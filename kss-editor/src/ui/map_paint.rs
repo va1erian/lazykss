@@ -153,15 +153,16 @@ fn paint_buffer_backdrop(
     theme: &Theme,
 ) {
     let a = theme.accent;
-    let tones = [
+    let (light, dark) = (
         Rgba::with_alpha(a.r, a.g, a.b, 20),
         Rgba::with_alpha(a.r, a.g, a.b, 50),
-    ];
+    );
     let (l, t, r, b) = visible_cells(editor, view, area);
     for y in t..b {
         for x in l..r {
             if !editor.in_bounds(x, y) {
-                canvas.fill_rect_rgba(cell_rect(view, (x, y)), tones[((x + y) & 1) as usize]);
+                let tone = if (x + y) & 1 == 0 { light } else { dark };
+                canvas.fill_rect_rgba(cell_rect(view, (x, y)), tone);
             }
         }
     }

@@ -52,16 +52,26 @@ impl ViewState {
 
     /// Tells the view how big the room is; recomputes the scroll range.
     pub fn set_room(&mut self, width: usize, height: usize) {
-        self.room_cells = (width as i32, height as i32);
+        let cells = |n: usize| i32::try_from(n).unwrap_or(i32::MAX);
+        self.room_cells = (cells(width), cells(height));
         self.sync_content();
     }
 
+    // The sizes come from the ROM and the offsets from the pointer: the maths
+    // below saturates rather than trust either to stay small.
+
     fn sync_content(&mut self) {
-        let cell = CELL as i32 * self.zoom;
-        let margin = 2 * BUFFER_MARGIN * cell;
+        let cell = (CELL as i32).saturating_mul(self.zoom);
+        let margin = (2 * BUFFER_MARGIN).saturating_mul(cell);
         self.scroller.content = (
-            self.room_cells.0 * cell + margin,
-            self.room_cells.1 * cell + margin,
+            self.room_cells
+                .0
+                .saturating_mul(cell)
+                .saturating_add(margin),
+            self.room_cells
+                .1
+                .saturating_mul(cell)
+                .saturating_add(margin),
         );
         self.scroller.clamp();
     }
@@ -69,21 +79,28 @@ impl ViewState {
     /// Scrolls to the room's top-left corner, the buffer just out of view
     /// above and to the left.
     pub fn home(&mut self) {
-        self.scroller.offset = (MARGIN * self.zoom, MARGIN * self.zoom);
+        let edge = MARGIN.saturating_mul(self.zoom);
+        self.scroller.offset = (edge, edge);
         self.scroller.clamp();
     }
 
     /// Whether the room itself (without the buffer) fits the view's height.
     pub fn room_fits_vertically(&self) -> bool {
-        self.room_cells.1 * CELL as i32 * self.zoom <= self.scroller.view().height()
+        self.room_cells
+            .1
+            .saturating_mul(CELL as i32)
+            .saturating_mul(self.zoom)
+            <= self.scroller.view().height()
     }
 
     /// The room pixel under a point of the node (may lie outside the room).
     pub fn to_room(&self, x: i32, y: i32) -> (i32, i32) {
         let (ox, oy) = self.scroller.offset;
+        // `set_zoom` keeps the zoom at least 1; `max` only guards the division.
+        let zoom = self.zoom.max(MIN_ZOOM);
         (
-            (x + ox).div_euclid(self.zoom) - MARGIN,
-            (y + oy).div_euclid(self.zoom) - MARGIN,
+            x.saturating_add(ox).div_euclid(zoom) - MARGIN,
+            y.saturating_add(oy).div_euclid(zoom) - MARGIN,
         )
     }
 
@@ -95,8 +112,12 @@ impl ViewState {
     /// The node point a room pixel is drawn at.
     pub fn to_screen(&self, pos: (i32, i32)) -> (i32, i32) {
         (
-            (pos.0 + MARGIN) * self.zoom - self.scroller.offset.0,
-            (pos.1 + MARGIN) * self.zoom - self.scroller.offset.1,
+            (pos.0.saturating_add(MARGIN))
+                .saturating_mul(self.zoom)
+                .saturating_sub(self.scroller.offset.0),
+            (pos.1.saturating_add(MARGIN))
+                .saturating_mul(self.zoom)
+                .saturating_sub(self.scroller.offset.1),
         )
     }
 
@@ -111,8 +132,12 @@ impl ViewState {
         self.zoom = zoom;
         self.sync_content();
         self.scroller.offset = (
-            (rx + MARGIN) * zoom - anchor.0,
-            (ry + MARGIN) * zoom - anchor.1,
+            (rx.saturating_add(MARGIN))
+                .saturating_mul(zoom)
+                .saturating_sub(anchor.0),
+            (ry.saturating_add(MARGIN))
+                .saturating_mul(zoom)
+                .saturating_sub(anchor.1),
         );
         self.scroller.clamp();
         true
@@ -128,8 +153,12 @@ impl ViewState {
     pub fn center_on(&mut self, pos: (i32, i32)) {
         let view = self.scroller.view();
         self.scroller.offset = (
-            (pos.0 + MARGIN) * self.zoom - view.width() / 2,
-            (pos.1 + MARGIN) * self.zoom - view.height() / 2,
+            (pos.0.saturating_add(MARGIN))
+                .saturating_mul(self.zoom)
+                .saturating_sub(view.width() / 2),
+            (pos.1.saturating_add(MARGIN))
+                .saturating_mul(self.zoom)
+                .saturating_sub(view.height() / 2),
         );
         self.scroller.clamp();
     }
