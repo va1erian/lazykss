@@ -1,13 +1,15 @@
 """Regenerates kss-core/src/sprite_table.rs from the running game.
 
-    python tools/harness/sprites.py            # rooms 0-26 (Spring Breeze)
-    python tools/harness/sprites.py 0 60       # another range of rooms
+    python tools/harness/sprites.py            # every room (0-318), about an hour
+    python tools/harness/sprites.py 0 26       # another range of rooms (here Spring Breeze)
     python tools/harness/sprites.py --sheet    # also save a picture of every sprite
 
 How it works, for each (object id, variant) the rooms use:
 
-1. Patch room 1 so it holds only that object, near Kirby, with the object
-   graphics slots of the room the object came from.
+1. Patch room 1 so it holds only that object, near Kirby. The graphics it
+   needs are supplied the cheapest way that works, tried in this order: the
+   object graphics slots of the room the object came from; that room's whole
+   graphics header; the room itself (room 1 becomes a copy of its pointer).
 2. Run the game into the room and read OAM: every sprite that is not Kirby
    (character 0x60 and up) belongs to the object.
 3. For each 8x8 character of those sprites, find the same 32 bytes in the
@@ -18,13 +20,16 @@ How it works, for each (object id, variant) the rooms use:
 5. Find where the palette row it uses is stored.
 
 The table holds addresses and layout only. An object is left out when it
-shows no sprite in room 1 (bosses that need their arena, invisible markers)
-or when any of its characters cannot be traced to the ROM.
+shows no sprite in any of the three set-ups (invisible markers, bosses that
+need more than their room's graphics) or when a character cannot be traced to
+the ROM.
 
-Takes about three seconds per object. See docs/emulator-harness.md.
+Takes about three seconds per object that works in the first set-up and up to
+thirty for one that works in none. See docs/emulator-harness.md.
 """
 
 import collections
+import functools
 import subprocess
 import sys
 
@@ -106,22 +111,35 @@ def find_frame(pieces):
     for mirrored in (False, True):
         for mask in (0xFF, 0xF1):
             want = [(c & 0xFF, (a ^ 0x40 if mirrored else a) & mask, large) for (_, _, c, a, large) in pieces]
-            match = numpy.ones(len(ROM_ARRAY) - 5 * count, dtype=bool)
-            for i, (character, attributes, large) in enumerate(want):
-                span = len(match)
-                match &= ROM_ARRAY[i * 5 + 3:span + i * 5 + 3] == character
-                match &= (ROM_ARRAY[i * 5 + 4:span + i * 5 + 4] & mask) == attributes
-                match &= (ROM_ARRAY[i * 5:span + i * 5] & 1) == large
             found = []
-            for offset in numpy.nonzero(match)[0]:
-                offset = int(offset)
-                if not ROM[offset + (count - 1) * 5] & 2 or any(ROM[offset + i * 5] & 2 for i in range(count - 1)):
+            for offset in _starts(*want[0], mask):
+                if offset + 5 * count > len(ROM) or not _records_match(offset, want, mask):
                     continue
                 if all(_same_layout(pieces, offset, i, mirrored) for i in range(1, count)):
                     found.append(offset)
             if found:
                 return found
     return []
+
+
+@functools.lru_cache(maxsize=None)
+def _starts(character, attributes, large, mask):
+    """Offsets whose 5-byte record could be the first piece (cached: many calls repeat it)."""
+    span = len(ROM_ARRAY) - 4
+    match = ROM_ARRAY[3:span + 3] == character
+    match &= (ROM_ARRAY[4:span + 4] & mask) == attributes
+    match &= (ROM_ARRAY[:span] & 1) == large
+    return [int(offset) for offset in numpy.nonzero(match)[0]]
+
+
+def _records_match(offset, want, mask):
+    """Whether the records at `offset` hold `want`, and only the last one ends the frame."""
+    count = len(want)
+    for i, (character, attributes, large) in enumerate(want):
+        record = ROM[offset + i * 5:offset + i * 5 + 5]
+        if record[3] != character or record[4] & mask != attributes or record[0] & 1 != large:
+            return False
+    return bool(ROM[offset + (count - 1) * 5] & 2) and not any(ROM[offset + i * 5] & 2 for i in range(count - 1))
 
 
 def _same_layout(pieces, offset, i, mirrored):
@@ -156,21 +174,65 @@ def origin_of(pieces):
 # ---------------------------------------------------------------- capture
 
 def objects_in(rooms):
-    """`{(id, variant): (room, slot bytes)}` for the first room each appears in."""
+    """`{(id, variant): room}` for the first room each appears in."""
     found = {}
     for index in rooms:
-        room = rom.room(index)
-        for ident, variant, _, _ in room.objects:
-            found.setdefault((ident, variant), (index, room.object_slots))
+        for ident, variant, _, _ in rom.room(index).objects:
+            found.setdefault((ident, variant), index)
     return found
 
 
-def capture(ident, variant, slots):
+def own_room_rom(index):
+    """Path of a copy of the ROM whose room 1 is room `index` (pointer copied)."""
+    data = bytearray(ROM)
+    entry = rom.room_table + 4 * index
+    data[rom.room_table + 4:rom.room_table + 8] = ROM[entry:entry + 4]
+    path = work_dir() / "own-room.sfc"
+    path.write_bytes(data)
+    return path
+
+
+def placement(room, tier):
+    """How to make the object appear: the graphics it needs, three ways.
+
+    1. The room's four object graphics slots, in Green Greens room 1.
+    2. The room's whole graphics header and fifth slot (sub-game sets).
+    3. The room itself: room 1 becomes a copy of the room's pointer entry.
+    """
+    head = rom.room(room).head
+    if tier == 0:
+        return {"edits": ["slots", head[42:46].hex()]}
+    if tier == 1:
+        return {"edits": ["raw", "22", head[22:47].hex()]}
+    return {"edits": [], "base": own_room_rom(room)}
+
+
+TIERS = ("slots", "graphics header", "own room")
+
+
+def capture(ident, variant, room, tier):
     """Places the object alone in room 1 and returns what the game drew."""
-    patched = patch(1, "clear-objects", "slots", slots, "object", hex(ident), hex(variant), "110", "100")
+    how = placement(room, tier)
+    object_edit = ["object", hex(ident), hex(variant), "110", "100"]
+    patched = patch(1, "clear-objects", *how["edits"], *object_edit, base=how.get("base"))
     e = enter(patched)
     pieces = [sprite for sprite in e.oam() if sprite[2] >= FIRST_OBJECT_CHARACTER]
     return pieces, e.vram(), e.palette()
+
+
+def trace(ident, variant, room):
+    """The table entry for an object and the tier that worked, or `(None, why)`."""
+    why = ""
+    for tier, name in enumerate(TIERS):
+        pieces, vram, palette = capture(ident, variant, room, tier)
+        if not pieces:
+            why = "no sprite in room 1 (from room %d)" % room
+            continue
+        entry, reason = resolve(pieces, vram, palette)
+        if entry is not None:
+            return entry, name
+        why = reason
+    return None, why
 
 
 def resolve(pieces, vram, palette):
@@ -179,7 +241,6 @@ def resolve(pieces, vram, palette):
     Each entry piece is one 8x8 character:
     `(dx, dy, flip bits, source index, character index, palette)`.
     """
-    origin = origin_of(pieces)
     cells = []
     votes = collections.Counter()
     for (x, y, character, attributes, large) in pieces:
@@ -192,16 +253,19 @@ def resolve(pieces, vram, palette):
                 row = side - 1 - ty if vflip else ty
                 index = (character + col + 16 * row) & 0x1FF
                 tile = vram[(0x600 + index) * 32:(0x600 + index) * 32 + 32]
-                cells.append((x + tx * 8 - origin[0], y + ty * 8 - origin[1], hflip, vflip, (attributes >> 1) & 7, tile))
+                cells.append((x + tx * 8, y + ty * 8, hflip, vflip, (attributes >> 1) & 7, tile))
                 for source, _ in CHARACTERS.get(tile, []):
                     votes[source] += 1
+    if any(not blank(cell[5]) and not CHARACTERS.get(cell[5]) for cell in cells):
+        # Checked before the slow frame search: most failures end here.
+        return None, "a character is not in any known source"
+    origin = origin_of(pieces)
     entry = []
-    for (dx, dy, hflip, vflip, row, tile) in cells:
+    for (x, y, hflip, vflip, row, tile) in cells:
         if blank(tile):
             continue
-        candidates = CHARACTERS.get(tile)
-        if not candidates:
-            return None, "a character is not in any known source"
+        dx, dy = x - origin[0], y - origin[1]
+        candidates = CHARACTERS[tile]
         # The same character can be in several packages: prefer the one most
         # of this object's characters are in.
         source, character = max(candidates, key=lambda c: votes[c[0]])
@@ -226,13 +290,15 @@ def resolve(pieces, vram, palette):
 # ---------------------------------------------------------------- output
 
 HEADER = '''// @generated by tools/harness/sprites.py; do not edit by hand.
-//! Generated table: where each Spring Breeze object's graphics live in the
+//! Generated table: where each object's graphics live in the
 //! ROM and how its 8x8 characters are laid out. It holds addresses and
 //! layout only; every pixel and colour is read from the user's ROM.
 //!
-//! Built by placing each object in Green Greens room 1, running the game in
-//! an emulator, and tracing the characters it put in OAM back to the
-//! compressed graphics packages they were loaded from.
+//! Built by placing each object in Green Greens room 1 (given the graphics
+//! of the room it comes from, or, failing that, made into a copy of that
+//! room), running the game in an emulator, and tracing the characters it put
+//! in OAM back to the compressed graphics packages they were loaded from.
+//! Covers the objects of every sub-game that could be traced.
 //! Regenerate with `python tools/harness/sprites.py`.
 
 /// A compressed stream of 4bpp characters: file offset, and the byte offset
@@ -301,7 +367,7 @@ def write_table(table):
 def save_sheet(table, path):
     """A picture of every object in the table, drawn from the ROM like kss-core does."""
     from PIL import Image, ImageDraw
-    sheet = Image.new("RGB", (1500, 900), (40, 40, 60))
+    sheet = Image.new("RGB", (1500, 6000), (40, 40, 60))
     draw = ImageDraw.Draw(sheet)
     x = y = 4
     row_height = 0
@@ -336,20 +402,16 @@ def save_sheet(table, path):
 def main(arguments):
     want_sheet = "--sheet" in arguments
     numbers = [int(a) for a in arguments if a != "--sheet"]
-    rooms = range(numbers[0], numbers[1] + 1) if len(numbers) == 2 else range(0, 27)
+    rooms = range(numbers[0], numbers[1] + 1) if len(numbers) == 2 else range(0, 319)
     table = {}
     wanted = objects_in(rooms)
-    for (ident, variant), (room, slots) in sorted(wanted.items()):
-        pieces, vram, palette = capture(ident, variant, slots)
-        if not pieces:
-            print("%02X/%02X  left out: no sprite in room 1 (from room %d)" % (ident, variant, room), flush=True)
-            continue
-        entry, why = resolve(pieces, vram, palette)
+    for (ident, variant), room in sorted(wanted.items()):
+        entry, how = trace(ident, variant, room)
         if entry is None:
-            print("%02X/%02X  left out: %s" % (ident, variant, why), flush=True)
+            print("%02X/%02X  left out: %s" % (ident, variant, how), flush=True)
             continue
         table[(ident, variant)] = entry
-        print("%02X/%02X  %d characters" % (ident, variant, len(entry)), flush=True)
+        print("%02X/%02X  %d characters (%s)" % (ident, variant, len(entry), how), flush=True)
     print("%d of %d objects resolved" % (len(table), len(wanted)))
     write_table(table)
     print("wrote", TABLE)
