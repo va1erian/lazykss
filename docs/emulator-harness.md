@@ -51,12 +51,19 @@ All output goes to `target/harness/`, which is not committed.
 |---|---|
 | `tools/harness/emu.py` | The emulator: boot a ROM, press buttons, run frames, read memory, take screenshots. No window. |
 | `tools/harness/kss.py` | An independent Python reader for the ROM (decompressor, rooms, resources). Independent on purpose: it checks `kss-core` rather than repeating it. |
-| `tools/harness/session.py` | `enter(rom)` puts you in Green Greens room 1 in about two seconds; `patch(room, ...)` builds an edited ROM through `kss-core`'s real save code. |
+| `tools/harness/session.py` | `enter(rom)` puts you in Green Greens room 1 in about two seconds; `enter_subgame(name, rom)` does the same for the other sub-games; `loaded_room(e)` says which room is in play; `patch(room, ...)` builds an edited ROM through `kss-core`'s real save code. |
 | `tools/harness/selfcheck.py` | Verifies the three files above against the ROM. |
 | `tools/harness/probe.py` | Traces VRAM contents back to ROM resources; finds where a compressed stream starts. |
 | `tools/harness/experiment_blocks.py` | A complete worked experiment. **Copy it to start a new one.** |
 | `tools/harness/experiment_doors.py` | Added doors, and what a door's destination counts from. |
 | `tools/harness/experiment_treasures.py` | Opens a chest of every treasure number and saves the windows. |
+| `tools/harness/experiment_byte0.py` | Byte 0 of the room block, changed in room 1 and in each sub-game's first room: nothing differs. |
+| `tools/harness/experiment_levels.py` | One contact sheet per level 4-44: the level's first room, with Green Greens' level-table entry moved. |
+| `tools/harness/experiment_subgames.py` | A tile edit and a relocating (`noise`) edit of each sub-game's first room, played in. |
+| `tools/harness/experiment_subgame_doors.py` | An added door in Dyna Blade is level-relative; the `0x40nn` destinations. |
+| `tools/harness/experiment_music_bit.py` | Bit 7 of the music byte, by recording the sound. |
+| `tools/harness/experiment_gourmet.py` | Gourmet Race objects: signs, foods, check point and goal. |
+| `tools/harness/experiment_romk.py` | Revenge of Meta Knight's dialogue object 0xBC, all 25 variants. |
 | `tools/harness/sprites.py` | Regenerates `kss-core/src/sprite_table.rs`. |
 
 ## What you can read
@@ -77,6 +84,8 @@ e.shot("target/harness/a.png") # what is on screen
 | `e.oam()` | sprites on screen | `(x, y, character, attributes, large)`, front first |
 | `e.shot()` | the frame, 256x224 | a PIL image |
 | `e.state()` | the core's savestate | everything, in the core's own layout |
+| `e.record_audio(frames)` | the sound of those frames | 16-bit stereo, 32 kHz; the core is deterministic, so equal bytes are equal sound |
+| `e.poke_bwram(offset, value)` | writes a byte of cartridge RAM | the unlock byte, see "The other sub-games" |
 
 Known places in memory while a room runs:
 
@@ -231,14 +240,24 @@ python tools/harness/sprites.py --sheet
 ```
 
 places each object alone in room 1, reads what the game put in OAM, and
-traces every 8x8 character and the palette back to ROM addresses. It rewrites
+traces every 8x8 character and the palette back to ROM addresses. It covers
+every room (0-318) and takes about an hour. It rewrites
 `kss-core/src/sprite_table.rs` and saves `target/harness/sprites.png`. Run on
 an unchanged tree, it must reproduce the committed table exactly (`git diff`
 shows nothing): that is the check that the harness still behaves as it did.
+`python tools/harness/sprites.py 0 26` runs Spring Breeze only (about eight
+minutes) but writes a table of only those objects.
+
+The object gets the graphics it needs in up to three ways, cheapest first:
+the object graphics slots of the room it came from, that room's whole
+graphics header, or room 1 made a copy of that room (`own_room_rom`). The
+first that shows a sprite whose characters all trace is used.
 
 Objects it leaves out are listed with the reason. To cover them, the object
-must be made to appear (bosses need their own room) and its characters must
-be in a source the script knows (`SHARED_SHEETS`, the package table).
+must be made to appear (bosses need their arena and markers) and its
+characters must be in a source the script knows (`SHARED_SHEETS`, the package
+table). The Gourmet Race objects do appear in their own room but their
+characters are in no known source.
 
 ## Getting somewhere else in the game
 
@@ -272,6 +291,134 @@ an absolute one.
 To **enter a door**, Kirby must stand in the cell the door's position names
 and press Up (`e.tap("Up")`). At the start of room 1 that is cell (1, 6),
 door position (24, 144).
+
+## The other sub-games
+
+Everything above was found in Spring Breeze. The cork-board menu offers more;
+`session.py` plays it for you:
+
+```python
+from session import enter_subgame, loaded_room, patch
+e = enter_subgame("dyna_blade")                  # in its first room, about 3 s
+e = enter_subgame("great_cave", patch(72, "noise", "tile", "5", "3", "0x6f"))
+loaded_room(e)                                   # which room's whole tile map is at 7F:0000
+```
+
+| Name | First room | Notes |
+|---|---|---|
+| `dyna_blade` | 28 | The game starts in the *second* room of level 4 (rooms 27-32), a tall 11x23 room, Kirby on a pink column. Room 27 (176x8, palm trees) is reached by door `0x4000`. |
+| `gourmet_race`, `gourmet_race_course2`, `_course3` | 68, 69, 70 | Single-course races (rooms 68-70 are levels 11-13). |
+| `great_cave` | 72 | |
+| `revenge_of_meta_knight` | 154 | Needs the unlock below. Meta Knight's crew speak first; B, X and Y turn the pages, A and Start do not. |
+
+The routes were found as described under "Getting somewhere else": a tap, a
+screenshot, a look. What is on the board of a fresh file **[emu]**: Spring
+Breeze, Gourmet Race, Dyna Blade, The Great Cave Offensive and Megaton Punch
+(and a sound test and a stereo/mono switch at its edge). The cursor
+**skips Milky Way Wishes and Revenge of Meta Knight**: they are locked.
+`enter_subgame` caches savestates at the board and at each title screen
+(`target/harness/cork-board.state`, `title-*.state`), like `pre_state`. A tap
+needs its 200 frames and the cursor ignores buttons for a moment after a
+state is loaded; both are built into the helpers. Making an `Emu` restarts
+the core, so fetch the cached state before creating the `Emu` that will use it.
+
+**The unlock** is byte `0x1A85` of the cartridge RAM (`e.bwram()`): 1 on a
+fresh file. Written 2, Revenge of Meta Knight opens and was played
+(`SUBGAMES[...]["unlock"]`); written 3, Milky Way Wishes opens too. It was
+found by writing 0xFF over each 128, then 16, then 1 byte of the saved area
+and watching whether the cursor reached the panel. 4 and 5 open nothing more
+that was seen; 6 plays a cut-scene; 8 and up gave garbage. **Not found:** The
+Arena (no panel appeared for any value tried), and a way to enter a planet of
+Milky Way Wishes: with 3 the title, the intro and the star map load and the
+star can be flown with the D-pad, but A, B, X, Y, Start and Up did nothing
+over the nearest planet in the time spent. `enter_subgame` has no
+`milky_way` for that reason.
+
+### Levels 4-44 of the level table
+
+Found by making Green Greens' entry of the level table point at the level
+(`experiment_levels.py`, one contact sheet per level) and by the real routes.
+"Real" means the sub-game's own mode was played from the menu; the rest is the
+first room of the level shown in Spring Breeze's mode (its stage-intro sprites
+come out as garbage there and its HUD is Spring Breeze's).
+
+| Level | Rooms | What | Basis |
+|---|---|---|---|
+| 4 | 27-32 | Dyna Blade, Peanut Plains | real: the game starts in room 28 |
+| 5 | 33-42 | Dyna Blade, Mallow Castle | doors `0x4007`/`0x4008` from room 28 land in a castle garden (34) and a castle hall (35) |
+| 6 | 43-51 | Dyna Blade, Cocoa Cave | brown cave; by order |
+| 7 | 52-62 | Dyna Blade, Candy Mountain | snowy peaks at night; by order |
+| 8 | 63-65 | Dyna Blade's Nest (last stage) | mountain slope; by order, least sure |
+| 9, 10 | 66, 67 | single castle interiors with item rooms | not identified; probably parts of Mallow Castle |
+| 11, 12, 13 | 68, 69, 70 | Gourmet Race courses 1, 2, 3 | real |
+| 14 | 71 | 11x22 sky shaft, no objects | not identified |
+| 15 | 72-152 | The Great Cave Offensive | real |
+| 16 | 153 | 11x80 vertical room, clouds at the top | not identified (the cave's exit?) |
+| 17 | 154-156 | Revenge of Meta Knight, Prologue (Warp Star ride to the Halberd, sunset) | real |
+| 18-25 | 157-196 | Revenge of Meta Knight, the chapters in order: 18 shore, 19 forest, 20 deck with propeller engines, 21 main cannon, 22 right wing, 23 engine room, 24 interior (helper HUD), 25 reactor | order, backgrounds and dialogue; chapter names and numbers not checked |
+| 26-34 | 197-261 | Milky Way Wishes: 26 Floria (four 121x8 rooms), 27 lava planet, 28 cloud planet, 29 night cliffs, 30 water planet, 31 machine planet, 32 star field, 33 purple jungle, 34 Nova (object 0x60, Marx's room 261) | Spring Breeze-mode first rooms only; **the planet names are guesses**, not played |
+| 35 | 262-283 | The Arena (22 rooms, Marx in 283) | by room count and Marx's song; not played |
+| 36 | 284 | one 11x8 room, Whispy Woods' trunk on grass | not identified |
+| 37-41 | 285-297 | the guide's curtain rooms: 37 holds the "explain copy" guide (room 288 was in play in Dyna Blade's, **real**), 39 the Gourmet Race guide, 40 the cave guide (matching backdrops); 38 and 41 other guides' curtain rooms | partly real |
+| 42, 43, 44 | 298, 299, 300 | a 176x8 sea panorama, a forest room with an enemy bar (11x8), a pink/teal 11x32 room | not identified |
+| 45-59 | 301-318 | 2x2 dummy rooms | |
+
+Door destinations count from the first room of the level the door is in and
+can run past that level's end (a door in room 28 to `0x4007` enters room 34,
+which is level 5) **[emu]**.
+
+### What was seen in each sub-game
+
+- **Byte 0 of the room block** does nothing visible. Room 1 with byte 0 set
+  to 01, 02, 03, 04, 05, 06, 0A and FF, and each sub-game's first room set
+  to 00 and 0A: same screens, same BW-RAM, same WRAM (the cave: three WRAM
+  bytes differ at 7E:1FE4, screens identical) **[emu]**
+  (`experiment_byte0.py`). Which sub-game a room belongs to is decided by the
+  level table and the menu. Not tested: changing it in every room at once,
+  or in rooms other than the first.
+- **Edited rooms load and play** in Dyna Blade (room 28), Gourmet Race (68),
+  The Great Cave Offensive (72) and Revenge of Meta Knight (154): a small
+  in-place tile edit shows, and an edit with `noise` (the pointer moved to
+  another bank) loads: the tile map at 7F:0000 equals the one an independent
+  reader parses from the patched ROM, and the noise is on screen **[emu]**
+  (`experiment_subgames.py`). Kirby walked for two seconds without a problem;
+  the rooms were not played through.
+- **An added door in Dyna Blade** (room 28, destination 3) enters room 30:
+  level-relative, as in Spring Breeze **[emu]** (`experiment_subgame_doors.py`).
+  A door needs its door tile (metatile attribute 0x0F: 0x4B in Dyna's
+  tileset, 0x7E in Green Greens') as well as the record and the star.
+  Destinations `0x4000 | n` lead to the same room as `n`; what the flag
+  changes was not found.
+- **Music byte, bit 7**: with it set the room does not start its song, and the
+  song that was playing is stopped, not kept. Room 1 with 0x8F instead of
+  0x0F: the stage card's song stops after the room change, a short quiet
+  tail, then silence for the rest of the recording, where 0x0F and 0x10 play
+  on. In Revenge of Meta Knight's room 154 (0xB3) the first four seconds (the
+  dialogue) are silent; with 0x33 the song starts at once; the music starts
+  anyway later (a script starts it) **[emu]**, by recording the sound
+  (`experiment_music_bit.py`). Not found: whether the low bits still matter
+  when bit 7 is set (the four bit-7 values gave different, tiny tails). Song
+  0x0A is a three-second jingle that stops by itself.
+- **Gourmet Race**: 0x65 is King Dedede's start place; 0xC0 variant 0 the
+  numbered start sign (without it nothing moves); 0xC0 variant 16 reached
+  shows CHECK POINT and moves on to the next course, variant 32 shows GOAL!
+  and the results screen (courses 1 and 2 end with 16, course 3 with 32); a
+  course without a goal object stays black. 0xC1 are arrow signs (the
+  variant turns the arrow), 0xC2-0xD1 one food per id (the variant does not
+  change the look; in the original it counts 0..39 along the course), 0xD2
+  is a Maxim Tomato **[emu]** (`experiment_gourmet.py`). Not tested: what the
+  food variant (the counter) is used for, 0xC1 variant 16 in groups near the
+  end.
+- **Revenge of Meta Knight**: object 0xBC's variant is the number of the
+  dialogue (25 lines, 0-24, each with the speaker's portrait; see
+  `romk-dialogue.png`) and it starts when Kirby is near the object **[emu]**
+  (`experiment_romk.py`). 0xBD was not looked at. The HUD shows a countdown
+  ("TIME", 2900 at the start, counting down through the dialogue and play)
+  **[emu]**; what happens at zero, and the escape timer of the last chapter,
+  were not tested.
+- **Not tested at all**: Dyna Blade's map switches (0x7F, 0xAB), what the
+  `0x40nn` flag does, Milky Way Wishes' copy essences (0x94/0x95) and whether
+  their variant picks the ability, The Arena's room order and its rest room.
 
 ## Mistakes already made, so you do not repeat them
 
@@ -313,9 +460,11 @@ door position (24, 144).
 - Anything about **timing or audio**.
 - Whether a ROM works on **real hardware** or in another emulator. A saved
   ROM was also played in ares by hand; that is the cross-check.
-- Rooms outside Spring Breeze have been loaded and rendered, not played.
-  The Great Cave Offensive's treasure chests and doors were studied in room
-  1 and through its data, not by playing the cave.
+- Milky Way Wishes and The Arena have not been entered (see "The other
+  sub-games"). The other sub-games were entered and their first rooms played
+  for seconds, not played through; The Great Cave Offensive's treasure chests
+  and doors were studied in room 1 and through its data, not by playing the
+  cave.
 
 ## Reporting what you found
 

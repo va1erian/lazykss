@@ -11,8 +11,12 @@ const DOOR_SIZE: usize = 10;
 const DOORS_START: usize = SECTIONS_OFFSET + 2;
 /// The word that ends the door list. No door can lead to it.
 const TERMINATOR: u16 = 0xFFFF;
+/// A flag two of the game's destinations carry (room 59 leads to "4008",
+/// room 167 to "4007"): the game enters room `n` for `4000 | n` as for `n`. What the flag
+/// changes is not established; it is kept when the room is changed.
+const ROOM_FLAG: u16 = 0x4000;
 /// Destinations from here up do not name a room.
-const FIRST_SPECIAL: u16 = 0x4000;
+const FIRST_SPECIAL: u16 = 0x8000;
 
 /// A door record of section 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +40,7 @@ pub enum Destination {
     Room(usize),
     /// `7FFF`: the goal door of a stage (its door star has variant 16).
     LevelExit,
-    /// Any other value of `4000` and up; the meaning is not established.
+    /// A value of `8000` and up; none occurs in the game.
     Special(u16),
 }
 
@@ -61,7 +65,8 @@ impl Door {
             // A level starts at a table index, far below any overflow; a
             // saturated index names no room, as a bad one would.
             d if d < FIRST_SPECIAL => {
-                Destination::Room(level.rooms.start.saturating_add(usize::from(d)))
+                let room = usize::from(d & !ROOM_FLAG);
+                Destination::Room(level.rooms.start.saturating_add(room))
             }
             d => Destination::Special(d),
         }
@@ -72,7 +77,24 @@ impl Door {
     pub fn relative_to(level: &Level, room: usize) -> Option<u16> {
         room.checked_sub(level.rooms.start)
             .and_then(|d| u16::try_from(d).ok())
-            .filter(|&d| d < FIRST_SPECIAL)
+            .filter(|&d| d < ROOM_FLAG)
+    }
+
+    /// True for a destination that names a room with the `4000` flag.
+    pub fn has_room_flag(&self) -> bool {
+        self.dest_room != Self::LEVEL_EXIT
+            && self.dest_room & (FIRST_SPECIAL | ROOM_FLAG) == ROOM_FLAG
+    }
+
+    /// This door, leading to `room` of `level` instead, with the `4000`
+    /// flag kept when it had one. `None` when `room` cannot be stored.
+    pub fn retargeted(&self, level: &Level, room: usize) -> Option<Door> {
+        let relative = Self::relative_to(level, room)?;
+        let flag = if self.has_room_flag() { ROOM_FLAG } else { 0 };
+        Some(Door {
+            dest_room: relative | flag,
+            ..*self
+        })
     }
 
     fn words(&self) -> [u16; 5] {

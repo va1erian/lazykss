@@ -17,5 +17,5 @@ pub mod treasure;
 
 pub use gfx::{Image, Layers, Tileset};
 pub use rom::Rom;
-pub use room::{Block, CELL, Destination, Door, Level, Object, Room, SaveReport, Tables};
+pub use room::{Block, CELL, Destination, Door, Level, Object, Room, SaveReport, SubGame, Tables};
 pub use sprites::{ObjectSprites, Sprite};

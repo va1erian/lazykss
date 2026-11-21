@@ -1,7 +1,9 @@
 # lazykss user guide
 
 A level editor for *Kirby Super Star* (SNES, US). It edits the rooms of
-**Spring Breeze** and **The Great Cave Offensive** and saves a new ROM.
+every sub-game played through rooms: **Spring Breeze**, **Dyna Blade**,
+**Gourmet Race**, **The Great Cave Offensive**, **Revenge of Meta Knight**,
+**Milky Way Wishes** and **The Arena**, and saves a new ROM.
 
 [Getting started](#getting-started) ·
 [The window](#the-window) ·
@@ -11,6 +13,7 @@ A level editor for *Kirby Super Star* (SNES, US). It edits the rooms of
 [Objects](#objects) ·
 [Doors and warp stars](#doors-and-warp-stars) ·
 [Treasures](#treasures) ·
+[Sub-game objects](#sub-game-objects) ·
 [Room settings](#room-settings) ·
 [Undo](#undo) ·
 [Saving](#saving) ·
@@ -29,10 +32,13 @@ Your original ROM is never modified unless you pick it yourself in Save As.
 
 ## The window
 
-- **Room browser** (left): the stages of Spring Breeze, The Great Cave
-  Offensive (81 rooms) and *Other rooms (unverified)*. Each room shows its size in cells.
-  A `*` marks a room, or a group, with unsaved changes. The first room of
-  each stage is its title card.
+- **Room browser** (left): each sub-game, its levels (stages, courses,
+  chapters, planets) and their rooms; The Arena's rooms sit directly under
+  it. *Other rooms* holds the guide's theatre, demo and dummy rooms, which
+  no sub-game plays. Each room shows its size in cells, and a `*` marks a
+  room, or a group, with unsaved changes. Spring Breeze opens expanded.
+  The first room of each Spring Breeze stage is its title card; Dyna Blade
+  starts in its *second* room (28).
 - **Map** (centre): the room as the game draws it, with its background,
   tiles and object sprites. Around it, on a checkerboard, is the
   [buffer](#buffer-and-stamp): scratch space that is never saved.
@@ -132,8 +138,9 @@ Things to know:
 - The list shows ID and variant in **hex**; the number fields take
   **decimal**. A treasure chest is `B8` in the list and 184 in the field.
 - Positions are kept inside the room.
-- Objects the editor cannot draw (bosses, stage intros, a few others) appear
-  as labelled boxes. They work in game all the same.
+- Objects the editor cannot draw (most bosses, stage intros, invisible
+  markers and all of Gourmet Race's signs and foods) appear as labelled
+  boxes. They work in game all the same.
 - Not every ID and variant pair exists in the game. An unknown one may do
   nothing, misbehave or crash: test in an emulator.
 
@@ -162,11 +169,21 @@ Rules and corner cases:
   number in *To room*; the editor stores it relative to the level and shows
   the stored value in *Stored*. A room before the level's first room
   cannot be reached and is refused.
+- **A door needs a door tile.** Kirby can only take a door whose trigger
+  cell holds a door tile (collision attribute `0F`; the Tiles tab shows a
+  tile's attribute). *Add door* does not paint one: paint the tileset's door
+  tile on the trigger cell. The Doors tab warns when it is missing. Some of
+  the game's own doors hide under a breakable block and work once it is
+  broken.
 - Stored `7FFF` is the stage's **goal door** (it ends the stage; its door
-  star has variant 16). Other stored values from `4000` up are special
-  codes whose meaning is unknown: leave them alone.
-- A door leading outside its level, or to a room that does not exist, gets a
-  warning. **The game does not check doors**: a bad one can crash it.
+  star has variant 16).
+- A stored `4000 + n` leads to the same room as `n`, with a flag whose
+  purpose is unknown (two of the game's doors use it). Editing *To room*
+  keeps the flag.
+- A door to a room that does not exist gets a warning, and a door past its
+  level's last room a note: the game follows it (a test door from Dyna
+  Blade's room 28 entered Mallow Castle). **The game does not check doors**: a
+  bad one can crash it.
 - The arrival point is not checked either. Make sure Kirby lands somewhere
   he can stand.
 - A room holds at most 255 doors.
@@ -191,11 +208,32 @@ Corner cases:
 - Numbers from 60 up open an empty window. Two chests with the same number
   have not been tested.
 
+## Sub-game objects
+
+Some objects of the other sub-games use their variant for a number. The
+Objects list names them:
+
+- **Gourmet Race**: `C0` is a **race sign**: variant 0 starts the race, 16
+  is a checkpoint that ends the course (courses 1 and 2), 32 the goal
+  (course 3). A course needs a start and a checkpoint or goal: without
+  them the race never starts or never ends. `65` is King Dedede's start
+  place, `C1` an arrow sign (the variant turns it), `C2` to `D1` are foods
+  and `D2` a Maxim Tomato.
+- **Revenge of Meta Knight**: `BC` is a **dialogue**: its variant is the
+  line (0 to 24) shown, with its speaker, when Kirby comes near. The lines
+  are shared by the whole sub-game.
+- Ability items (`90`, `91`) and Milky Way Wishes' copy essences (`95`)
+  seem to pick the ability with the variant's first hex digit; this has
+  not been tested.
+
 ## Room settings
 
 The **Room** tab:
 
-- **Music**: the song id the room plays, with its name when known.
+- **Music**: the song id the room plays, with its name when known. With
+  128 added (bit 7 set, as in Revenge of Meta Knight's dialogue rooms) the
+  room starts no song and silences the one playing: the game starts the
+  music later from a script.
 - **Size**: width and height in cells (up to 512x128, and at most 30,000
   cells). **Resize** keeps the top-left cells; new cells are empty (tile
   0). Objects and doors left outside the new size stay in the lists: the
@@ -232,9 +270,14 @@ another ROM.
 
 ## Limitations
 
-- Only Spring Breeze and The Great Cave Offensive are named and tested.
-  Rooms under *Other rooms (unverified)* open and save, but nothing about them has been
-  checked in game.
+- Spring Breeze was played through; the first rooms of Dyna Blade, Gourmet
+  Race, The Great Cave Offensive and Revenge of Meta Knight were edited,
+  saved and played for a few seconds. Milky Way Wishes and The Arena open,
+  render and save, but no edited room of theirs has been run. Their level
+  names, and those of the Revenge of Meta Knight chapters, come from what
+  the rooms show.
+- The level a room belongs to comes from the menu, not from the room: a
+  room's header byte 0 is a tag the game ignores.
 - Not editable: tilesets, graphics, palettes, the background, collision
   attributes, the room header, scroll and camera settings.
 - The background is drawn fixed to the room's corner; in game it scrolls at

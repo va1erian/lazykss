@@ -1,7 +1,7 @@
 //! Pushing the editor's state into the widgets.
 
 use kss_core::Destination;
-use kss_core::names::song_name;
+use kss_core::names::music_label;
 use kss_core::treasure;
 use xui::prelude::*;
 
@@ -205,7 +205,10 @@ impl EditorApp {
                     .selected_door
                     .and_then(|i| e.room().doors().get(i).copied().map(|d| (i, d)));
                 let level = e.level().map(|l| (l.name.clone(), l.rooms.clone()));
-                door.map(|(i, d)| (d, e.destination(&d), e.warps_of(i).len(), level))
+                door.map(|(i, d)| {
+                    let tile = e.door_tile_present(&d);
+                    (d, e.destination(&d), e.warps_of(i).len(), level, tile)
+                })
             })
             .flatten();
         let count = self.ed(|e| e.room_count()).unwrap_or(0);
@@ -232,20 +235,27 @@ impl EditorApp {
         }
         let note = match info {
             None => "Select a door in the list or on the map.".to_string(),
-            Some((d, destination, warps, level)) => {
+            Some((d, destination, warps, level, door_tile)) => {
                 // One line fits the panel: the most important thing to say.
                 match (destination, &level) {
                     (Some(Destination::Room(r)), _) if r >= count => {
                         format!("Warning: room {r} does not exist.")
                     }
+                    _ if !door_tile => {
+                        "Warning: no door tile on the trigger cell: Kirby cannot enter it."
+                            .to_string()
+                    }
                     (Some(Destination::Room(r)), Some((name, rooms))) if !rooms.contains(&r) => {
-                        format!("Warning: room {r} is outside {name}.")
+                        format!("Room {r} is past the end of {name}: check it is the one meant.")
                     }
                     (Some(Destination::LevelExit), _) => {
                         "The stage's goal door (stored 7FFF).".to_string()
                     }
                     (Some(Destination::Special(v)), _) => {
-                        format!("Stored {v:04X}: not a room (meaning unknown).")
+                        format!("Warning: stored {v:04X} names no room.")
+                    }
+                    _ if d.has_room_flag() => {
+                        format!("Stored {:04X}: a room with flag 4000 (kept).", d.dest_room)
                     }
                     _ if !d.has_trigger() => match warps {
                         0 => "No trigger, and no warp star uses it.".to_string(),
@@ -335,10 +345,7 @@ impl EditorApp {
             return;
         };
         self.h.music.get().set_value(music as f64);
-        self.h
-            .music_name
-            .get()
-            .set_text(song_name(music).unwrap_or("(unnamed song)"));
+        self.h.music_name.get().set_text(&music_label(music));
         self.size = (width, height);
         self.h.size_fields[0].get().set_value(width as f64);
         self.h.size_fields[1].get().set_value(height as f64);
@@ -364,7 +371,11 @@ impl EditorApp {
                 .levels
                 .iter()
                 .find(|l| l.rooms.contains(&e.current_index()))
-                .map(|l| l.name.clone())
+                .map(|l| match l.sub_game {
+                    // A sub-game of one level is named after it.
+                    Some(game) if game.name() != l.name => format!("{}: {}", game.name(), l.name),
+                    _ => l.name.clone(),
+                })
                 .unwrap_or_default();
             let hovered = self.cursor.map(|(cell, _)| (cell, e.cell(cell.0, cell.1)));
             (

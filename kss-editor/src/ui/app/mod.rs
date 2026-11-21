@@ -16,7 +16,7 @@ use xui::xui_markdown::MarkdownView;
 
 use super::map::{MapEvent, MapView};
 use super::picker::TilePicker;
-use super::tree::{self, GROUPS, Node};
+use super::tree::{self, Expansion, Node};
 use super::{Editor, SharedEditor};
 use crate::editor::Tool;
 
@@ -175,7 +175,7 @@ pub struct EditorApp {
     pub(super) open_dialog: FileDialog<Msg>,
     pub(super) save_dialog: FileDialog<Msg>,
     pub(super) gesture: Gesture,
-    pub(super) expanded: [bool; GROUPS],
+    pub(super) expanded: Expansion,
     pub(super) tree_rows: Vec<xui::widget::TreeRow>,
     pub(super) tree_nodes: Vec<Node>,
     pub(super) dirty_seen: Vec<usize>,

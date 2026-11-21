@@ -24,7 +24,7 @@ mod tests;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kss_core::room::{GREAT_CAVE_OFFENSIVE, NAMED_LEVELS};
+use kss_core::room::GREAT_CAVE_OFFENSIVE;
 use kss_core::{Level, ObjectSprites, Rom, Room, Tables, Tileset};
 
 use crate::history::{Buffer, Entry, MapSnapshot};
@@ -165,10 +165,10 @@ impl Editor {
             stamp: None,
             group: None,
         };
-        // The named levels are listed with their sizes, and the treasure
-        // list covers every room of the cave: load them now. A room that
-        // cannot be read is left out; selecting it reports why.
-        for index in editor.named_rooms() {
+        // The sub-games' rooms are listed with their sizes, and the
+        // treasure list covers every room of the cave: load them now. A room
+        // that cannot be read is left out; selecting it reports why.
+        for index in editor.listed_rooms() {
             if editor.rooms.get(index).is_none()
                 && let Ok(room) = rooms::load_room(&editor.rom, &editor.tables, index)
             {
@@ -188,17 +188,15 @@ impl Editor {
         self.tables.room_count()
     }
 
-    /// The levels listed by name, in order.
-    pub fn named_levels(&self) -> impl Iterator<Item = &Level> + '_ {
-        NAMED_LEVELS
-            .iter()
-            .filter_map(|&i| self.tables.levels.get(i))
+    /// The levels the sub-games play, in level-table order.
+    pub fn listed_levels(&self) -> impl Iterator<Item = &Level> + '_ {
+        self.tables.levels.iter().filter(|l| l.sub_game.is_some())
     }
 
-    /// Every room of the named levels, in level order.
-    pub fn named_rooms(&self) -> Vec<usize> {
+    /// Every room of the sub-games' levels, in level order.
+    pub fn listed_rooms(&self) -> Vec<usize> {
         let count = self.tables.room_count();
-        self.named_levels()
+        self.listed_levels()
             .flat_map(|l| l.rooms.start.min(count)..l.rooms.end.min(count))
             .collect()
     }

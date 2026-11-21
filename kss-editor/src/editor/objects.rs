@@ -1,7 +1,7 @@
 //! Placing, moving and naming the objects of the current room, and the
 //! treasure chests of the cave.
 
-use kss_core::names::{TREASURE_CHEST, WARP_STAR};
+use kss_core::names::{DIALOGUE, RACE_SIGN, TREASURE_CHEST, WARP_STAR, race_sign};
 use kss_core::{CELL, Object};
 
 use super::{ChestSpot, Editor};
@@ -37,6 +37,8 @@ impl Editor {
                 Some(door) => format!("Warp Star \u{2192} {}", self.destination_label(&door)),
                 None => "Warp Star (no door record)".to_string(),
             },
+            RACE_SIGN => format!("Race sign: {}", race_sign(o.variant)),
+            DIALOGUE => format!("Dialogue line {}", o.variant),
             id => kss_core::names::object_name(id).unwrap_or("").to_string(),
         }
     }

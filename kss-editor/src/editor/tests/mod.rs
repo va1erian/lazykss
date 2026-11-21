@@ -40,11 +40,10 @@ fn opens_green_greens_room_one() {
     let Some(e) = editor() else { return };
     assert_eq!(e.current_index(), 1);
     assert_eq!((e.room().width, e.room().height), (100, 8));
-    let named = e.named_rooms();
-    assert_eq!(named.len(), 27 + 81);
+    assert_eq!(e.listed_rooms(), (0..284).collect::<Vec<_>>());
     assert_eq!(e.cave_rooms(), 72..153);
-    assert!(e.loaded(26).is_some() && e.loaded(152).is_some());
-    assert!(e.loaded(27).is_none());
+    assert!(e.loaded(26).is_some() && e.loaded(283).is_some());
+    assert!(e.loaded(284).is_none());
     assert!(!e.any_dirty());
 }
 

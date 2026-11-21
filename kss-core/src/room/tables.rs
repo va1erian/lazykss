@@ -1,6 +1,7 @@
 //! The pointer tables of bank `FF`: rooms, graphics resources and levels.
 
 use super::bytes::{long_pointer, offset_of, word};
+use super::subgames::{SubGame, level_name};
 use crate::rom::Rom;
 
 /// The directory of bank `FF`: words, relative to it, locating each table.
@@ -15,30 +16,18 @@ const ROOM_POINTER: usize = 4;
 const GFX_POINTER: usize = 3;
 const LEVEL_COUNT: usize = 60;
 
-/// The four stages of Spring Breeze are the first four levels of the table.
-pub const SPRING_BREEZE_LEVELS: std::ops::Range<usize> = 0..4;
 /// The Great Cave Offensive is one level of 81 rooms (72-152): the level
 /// that holds the treasure chests.
 pub const GREAT_CAVE_OFFENSIVE: usize = 15;
-/// The levels the editor lists by name, in order.
-pub const NAMED_LEVELS: [usize; 5] = [0, 1, 2, 3, GREAT_CAVE_OFFENSIVE];
-
-fn level_name(index: usize) -> Option<&'static str> {
-    Some(match index {
-        0 => "Green Greens",
-        1 => "Float Islands",
-        2 => "Bubbly Clouds",
-        3 => "Mt. Dedede",
-        GREAT_CAVE_OFFENSIVE => "The Great Cave Offensive",
-        _ => return None,
-    })
-}
 
 /// A stage: a run of consecutive rooms in the pointer table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Level {
     pub index: usize,
     pub name: String,
+    /// The sub-game the level is part of; `None` for the cut-scene, demo
+    /// and dummy levels from 36 up.
+    pub sub_game: Option<SubGame>,
     pub rooms: std::ops::Range<usize>,
 }
 
@@ -102,6 +91,7 @@ impl Tables {
             .map(|(index, (&start, end))| Level {
                 index,
                 name: level_name(index).map_or_else(|| format!("Level {index}"), str::to_string),
+                sub_game: SubGame::of_level(index),
                 rooms: start..end.max(start),
             })
             .collect();
