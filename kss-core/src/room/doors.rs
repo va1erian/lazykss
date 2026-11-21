@@ -136,8 +136,10 @@ impl Room {
     }
 
     /// Replaces the whole door list; the sections after it move. Doors with
-    /// a destination of `FFFF` are left out (it is the terminator).
-    pub fn set_doors(&mut self, doors: &[Door]) {
+    /// a destination of `FFFF` are left out (it is the terminator). Returns
+    /// false, with the room unchanged, when the head's section words do not
+    /// add up.
+    pub fn set_doors(&mut self, doors: &[Door]) -> bool {
         let mut payload: Vec<u8> = doors
             .iter()
             .filter(|d| d.dest_room != TERMINATOR)
@@ -145,8 +147,7 @@ impl Room {
             .flat_map(Door::record)
             .collect();
         payload.extend_from_slice(&TERMINATOR.to_le_bytes());
-        // A head whose section words do not add up is left as it is.
-        self.set_section(0, &payload);
+        self.set_section(0, &payload).is_some()
     }
 
     /// Inserts a door at `index` (at most the number of doors). Warp stars
@@ -157,8 +158,7 @@ impl Room {
             return false;
         }
         doors.insert(index, door);
-        self.set_doors(&doors);
-        true
+        self.set_doors(&doors)
     }
 
     /// Removes door `index` and returns it.
@@ -168,7 +168,6 @@ impl Room {
             return None;
         }
         let door = doors.remove(index);
-        self.set_doors(&doors);
-        Some(door)
+        self.set_doors(&doors).then_some(door)
     }
 }

@@ -89,7 +89,9 @@ impl Room {
             // Over the original, padded with FF to its old length.
             let mut padded = block.clone();
             padded.resize(self.stored_len, 0xFF);
-            rom.write(self.offset, &padded);
+            if !rom.write(self.offset, &padded) {
+                return Err(RoomError::BadPointer { room: self.index });
+            }
         }
         self.stored_len = block.len();
         rom.fix_checksum();
@@ -121,15 +123,20 @@ impl Room {
         let target = find_free(rom.data(), block.len()).ok_or(RoomError::NoFreeSpace {
             needed: block.len(),
         })?;
-        rom.write(target, block);
-        rom.write_long_pointer(pointer, target);
+        let bad = RoomError::BadPointer { room: self.index };
+        if !rom.write(target, block) || !rom.write_long_pointer(pointer, target) {
+            return Err(bad);
+        }
         let shared = tables
             .room_offsets
             .iter()
             .enumerate()
             .any(|(i, &offset)| i != self.index && offset == self.offset);
         if !shared {
-            rom.write(self.offset, &vec![0xFF; self.stored_len]);
+            // Checked against the image at the start of `save`.
+            if !rom.write(self.offset, &vec![0xFF; self.stored_len]) {
+                return Err(bad);
+            }
         }
         if let Some(offset) = tables.room_offsets.get_mut(self.index) {
             *offset = target;

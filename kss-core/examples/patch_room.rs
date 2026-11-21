@@ -80,7 +80,9 @@ fn main() -> Result<()> {
                     after: number(args, edit)? as u16,
                     extra: number(args, edit)? as u16,
                 });
-                room.set_blocks(&blocks);
+                if !room.set_blocks(&blocks) {
+                    return Err("the room's block list cannot be rewritten".into());
+                }
             }
             "door" => {
                 let mut n = || number(args, edit).map(|v| v as u16);
@@ -96,7 +98,11 @@ fn main() -> Result<()> {
                     return Err(format!("door {door:?} cannot be added").into());
                 }
             }
-            "clear-doors" => room.set_doors(&[]),
+            "clear-doors" => {
+                if !room.set_doors(&[]) {
+                    return Err("the room's door list cannot be rewritten".into());
+                }
+            }
             "clear-objects" => room.objects.clear(),
             "slots" => {
                 let value = u32::from_str_radix(text(args, edit)?, 16)?;

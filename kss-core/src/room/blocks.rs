@@ -110,8 +110,10 @@ impl Room {
 
     /// Replaces the list of breakable cells. Records are stored in map
     /// order, as the game's own rooms have them. Blocks outside the map, or
-    /// too far into it for a record to address, are left out.
-    pub fn set_blocks(&mut self, blocks: &[Block]) {
+    /// too far into it for a record to address, are left out. Returns
+    /// false, with the room unchanged, when the head's section words do not
+    /// add up.
+    pub fn set_blocks(&mut self, blocks: &[Block]) -> bool {
         let mut sorted: Vec<(&Block, u16)> = blocks
             .iter()
             .filter(|b| b.x < self.width && b.y < self.height)
@@ -126,8 +128,7 @@ impl Room {
             .flat_map(u16::to_le_bytes)
             .collect();
         payload.extend_from_slice(&TERMINATOR);
-        // A head whose section words do not add up is left as it is.
-        self.set_section(BLOCK_SECTION, &payload);
+        self.set_section(BLOCK_SECTION, &payload).is_some()
     }
 
     /// Brings the list of breakable cells in line with the map.
@@ -173,10 +174,6 @@ impl Room {
             }
         }
         blocks.sort_by_key(|b| (b.y, b.x));
-        let changed = blocks != old;
-        if changed {
-            self.set_blocks(&blocks);
-        }
-        changed
+        blocks != old && self.set_blocks(&blocks)
     }
 }

@@ -171,6 +171,8 @@ impl Room {
         self.tiles = tiles;
         self.width = width;
         self.height = height;
+        // A head whose section words do not add up keeps its old records,
+        // as it would keep any other part of it.
         if !blocks.is_empty() {
             self.set_blocks(&blocks);
         }

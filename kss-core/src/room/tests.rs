@@ -69,8 +69,8 @@ fn every_room_round_trips() {
         // Re-parse the encoded block from a scratch image.
         let mut copy = rom.clone();
         let at = 0x2F_E9A0;
-        copy.write(at, &block);
-        copy.write_long_pointer(tables.room_table + index * 4, at);
+        assert!(copy.write(at, &block));
+        assert!(copy.write_long_pointer(tables.room_table + index * 4, at));
         let moved = Room::load(&copy, &Tables::load(&copy), index).unwrap();
         assert_eq!(moved.tiles, room.tiles, "room {index}");
         assert_eq!(moved.objects, room.objects, "room {index}");
