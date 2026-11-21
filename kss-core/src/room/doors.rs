@@ -11,8 +11,8 @@ const DOOR_SIZE: usize = 10;
 const DOORS_START: usize = SECTIONS_OFFSET + 2;
 /// The word that ends the door list. No door can lead to it.
 const TERMINATOR: u16 = 0xFFFF;
-/// A flag some destinations carry (Dyna Blade's room 28 leads to "4007"):
-/// the game enters room `n` for `4000 | n` as for `n`. What the flag
+/// A flag two of the game's destinations carry (room 59 leads to "4008",
+/// room 167 to "4007"): the game enters room `n` for `4000 | n` as for `n`. What the flag
 /// changes is not established; it is kept when the room is changed.
 const ROOM_FLAG: u16 = 0x4000;
 /// Destinations from here up do not name a room.

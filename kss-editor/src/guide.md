@@ -181,8 +181,8 @@ Rules and corner cases:
   purpose is unknown (two of the game's doors use it). Editing *To room*
   keeps the flag.
 - A door to a room that does not exist gets a warning, and a door past its
-  level's last room a note: the game follows it (Dyna Blade's first room
-  leads into Mallow Castle that way). **The game does not check doors**: a
+  level's last room a note: the game follows it (a test door from Dyna
+  Blade's room 28 entered Mallow Castle). **The game does not check doors**: a
   bad one can crash it.
 - The arrival point is not checked either. Make sure Kirby lands somewhere
   he can stand.

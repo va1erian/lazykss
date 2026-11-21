@@ -32,7 +32,8 @@ impl Editor {
     }
 
     /// False when a door's trigger cell holds no door tile (metatile
-    /// attribute `0F`, or `8F` under water): Kirby cannot enter it there.
+    /// attribute `0F`): Kirby cannot enter it there. `8F` is accepted too:
+    /// Aqualiss's original doors sit on it (untested in the game).
     /// Some original doors start under a breakable block and are only
     /// entered once it is broken. A door without a trigger is never
     /// flagged.

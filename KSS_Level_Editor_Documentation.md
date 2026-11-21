@@ -73,8 +73,8 @@ The levels, and how each was identified:
 | Level | Rooms | Name | Basis |
 |---|---|---|---|
 | 0-3 | 0-26 | Green Greens (0-5), Float Islands (6-14), Bubbly Clouds (15-23), Mt. Dedede (24-26) | **[emu]** played; the first room of each stage is its title card |
-| 4 | 27-32 | Peanut Plains | **[emu]** played from the menu. The game starts in room 28, not 27: room 27 (176x8) is entered by door `4000` |
-| 5 | 33-42 | Mallow Castle | **[emu]** doors `4007`/`4008` from room 28 land in its garden and hall |
+| 4 | 27-32 | Peanut Plains | **[emu]** played from the menu. The game starts in room 28, not 27 (176x8) |
+| 5 | 33-42 | Mallow Castle | **[emu]** test doors `4007`/`4008` added to room 28 entered its garden and hall |
 | 6-8 | 43-65 | Cocoa Cave, Candy Mountain, Dyna Blade's Nest | by order and backgrounds; level 8 holds Dyna Blade (object `55`) |
 | 9, 10 | 66, 67 | "Secret Area 1/2" | guess: single castle interiors full of ability items |
 | 11-13 | 68, 69, 70 | Gourmet Race courses 1-3 | **[emu]** played from the menu |
@@ -146,8 +146,9 @@ Positions are pixels.
   0-35 read this way lead into their own level **[rom]**. A destination may
   run past the end of its level, and the game follows it.
 - `7FFF` is a stage's goal door; its door star has variant 16 **[rom]**.
-- **`4000 | n` leads to room `n`** as `n` does **[emu]**: from Dyna Blade's
-  room 28, `4000` entered room 27, `4007` room 34 and `4008` room 35. The
+- **`4000 | n` leads to room `n`** as `n` does **[emu]**: doors added to Dyna
+  Blade's room 28 with `4000`, `4007` and `4008` entered rooms 27, 34 and 35
+  (`tools/harness/experiment_subgame_doors.py`). The
   original rooms use it twice (room 59 → `4008`, room 167 → `4007`, both
   next to object `79`). What the flag changes was not found; the editor
   keeps it when the destination room is edited.
