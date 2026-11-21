@@ -138,8 +138,9 @@ Things to know:
 - The list shows ID and variant in **hex**; the number fields take
   **decimal**. A treasure chest is `B8` in the list and 184 in the field.
 - Positions are kept inside the room.
-- Objects the editor cannot draw (bosses, stage intros, a few others) appear
-  as labelled boxes. They work in game all the same.
+- Objects the editor cannot draw (most bosses, stage intros, invisible
+  markers and all of Gourmet Race's signs and foods) appear as labelled
+  boxes. They work in game all the same.
 - Not every ID and variant pair exists in the game. An unknown one may do
   nothing, misbehave or crash: test in an emulator.
 
