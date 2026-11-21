@@ -26,6 +26,17 @@ earlier session: it writes `<name> (edited).sfc` next to the ROM, or
 
 The GUI is built on [xui](https://github.com/va1erian/xui).
 
+## Releases
+
+Pushing a tag `vX.Y.Z` (or `vX.Y.Z-suffix`, published as a pre-release) runs
+`.github/workflows/release.yml`: it tests and builds the editor for Windows
+and Linux (x86-64) and attaches the archives, with their SHA-256 sums, to a
+GitHub release named after the tag.
+
+```text
+git tag v0.2.0-beta1 && git push origin v0.2.0-beta1
+```
+
 ## Licence
 
 MIT, see [LICENSE](LICENSE). The licence covers this code only: *Kirby Super
