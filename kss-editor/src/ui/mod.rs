@@ -30,7 +30,11 @@ pub const TITLE: &str = "lazykss \u{2014} Kirby Super Star level editor";
 
 /// Opens the window. `rom` overrides the automatic ROM lookup.
 pub fn run(rom: Option<PathBuf>) -> Result<()> {
-    let app = xui::app(TITLE).size(WINDOW.0, WINDOW.1);
+    // The icon `build.rs` embeds in the Windows executable; the Settings
+    // window inherits it. Backends without executable resources ignore it.
+    let app = xui::app(TITLE)
+        .size(WINDOW.0, WINDOW.1)
+        .icon(xui::WindowIcon::resource(ICON_RESOURCE));
     // Windows draws with Direct2D; elsewhere xui's software backend runs.
     // A headless snapshot run keeps the default, which renders offscreen:
     // an explicit backend would open a real window instead.
@@ -46,6 +50,9 @@ pub fn run(rom: Option<PathBuf>) -> Result<()> {
         build_app(ui, rom, new_shared())
     })
 }
+
+/// The icon's resource id in `assets/kss-editor.rc`.
+const ICON_RESOURCE: u16 = 1;
 
 /// The window's initial size in design units.
 pub const WINDOW: (i32, i32) = (1380, 860);

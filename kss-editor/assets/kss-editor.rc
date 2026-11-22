@@ -1,0 +1,3 @@
+// The application icon. Its id, 1, is the one `ui::run` gives xui; as the
+// lowest icon id it is also the one Explorer shows for the executable.
+1 ICON "kss-editor.ico"

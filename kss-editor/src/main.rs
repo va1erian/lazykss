@@ -1,3 +1,7 @@
+// A release build on Windows is a GUI app: no console window opens with it.
+// Debug builds keep the console, where panics and logs show.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use xui::prelude::*;
 
 fn main() -> Result<()> {

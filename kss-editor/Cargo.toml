@@ -24,3 +24,7 @@ xui = { git = "https://github.com/va1erian/xui", features = ["markdown"] }
 # Windows draws with Direct2D; other platforms use xui's software backend.
 [target.'cfg(windows)'.dependencies]
 xui-d2d = { git = "https://github.com/va1erian/xui" }
+
+# Embeds the icon in the Windows executable (`build.rs`).
+[build-dependencies]
+embed-resource = "3"
